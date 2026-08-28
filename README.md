@@ -115,8 +115,7 @@ keel-vk/
     ├── shared/           foundation: keel::World (EnTT), keel::Vfs, shared::FixedClock
     ├── net/              foundation: net::Host, a transport-only ENet wrap
     ├── client/           contract-test composition: the cube executable (keel-vk)
-    ├── server/           headless transport stub, no Vulkan/SDL dependency
-    └── samples/          reserved for future standalone samples
+    └── server/           headless transport stub, no Vulkan/SDL dependency
 ```
 
 `src/keel-vk/` is boilerplate, not "the engine": it stays generic and
