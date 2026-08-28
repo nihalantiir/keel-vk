@@ -143,22 +143,11 @@ void TextureStreamer::createSlotImage(uint32_t slotIndex, uint32_t width, uint32
     imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    // CONCURRENT (not EXCLUSIVE + an ownership-transfer barrier pair) when a
-    // dedicated transfer queue exists: the startup batch uploads via that
-    // queue (see Renderer::createTextureStreamer), later allocate()/update()
-    // calls upload via the graphics queue instead (processUploads runs
-    // inside the frame's own command buffer, deliberately not synchronized
-    // across queues on the hot path). CONCURRENT sidesteps needing an
-    // explicit transfer between the two without giving up correctness.
-    const uint32_t concurrentFamilies[] = {context_.queueFamilies().graphicsFamily.value(),
-                                            context_.uploadQueueFamily()};
-    if (context_.hasDedicatedTransferQueue()) {
-        imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
-        imageInfo.queueFamilyIndexCount = 2;
-        imageInfo.pQueueFamilyIndices = concurrentFamilies;
-    } else {
-        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    }
+    // EXCLUSIVE: construction uploads and per-frame streaming both run on
+    // the graphics queue/family (see the wiki's Rendering page for why
+    // 0.6.0 dropped the dedicated transfer queue), so there's no second
+    // queue family to hand this image to and no ownership transfer needed.
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -345,11 +334,9 @@ void TextureStreamer::processUploads(VkCommandBuffer cmd) {
         barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
         // ALL_COMMANDS/MEMORY_READ, not FRAGMENT_SHADER/SHADER_READ: this
-        // same code path also runs the one-time startup flush, which may
-        // be recorded against a transfer-only queue family (see
-        // VulkanContext::uploadQueue), where FRAGMENT_SHADER is not a
-        // valid destination stage. The coarser mask is cheap - this is an
-        // infrequent, not per-draw, transition.
+        // same code path also runs the one-time startup flush. The coarser
+        // mask is cheap - this is an infrequent, not per-draw, transition -
+        // and avoids naming a specific consumer stage that could change.
         barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT;
         barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;

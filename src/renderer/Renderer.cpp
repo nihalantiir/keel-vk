@@ -330,6 +330,10 @@ void Renderer::createCommandPool() {
 }
 
 void Renderer::createUploadCommandPool() {
+    // A separate pool from commandPool_, not because the queue family
+    // differs (it doesn't, see VulkanContext::uploadQueueFamily), but to
+    // keep construction-time throwaway command buffers out of the pool
+    // the per-frame reused ones live in.
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = context_.uploadQueueFamily();
@@ -337,9 +341,7 @@ void Renderer::createUploadCommandPool() {
     keel::vkCheck(vkCreateCommandPool(context_.device(), &poolInfo, nullptr, &uploadCommandPool_),
                   "Failed to create upload command pool");
     keel::setDebugObjectName(context_.device(), VK_OBJECT_TYPE_COMMAND_POOL,
-                              reinterpret_cast<uint64_t>(uploadCommandPool_),
-                              context_.hasDedicatedTransferQueue() ? "upload command pool (dedicated transfer)"
-                                                                    : "upload command pool (graphics)");
+                              reinterpret_cast<uint64_t>(uploadCommandPool_), "upload command pool");
 }
 
 void Renderer::createCommandBuffers() {
@@ -609,8 +611,8 @@ void Renderer::createTextureStreamer() {
     // Every later allocate()/update()/free() during the running app is
     // still drained by processUploads() inside the normal per-frame
     // command buffer instead (see recordCommandBuffer). Runs on the
-    // dedicated transfer queue if the device has one, the graphics queue
-    // otherwise (see VulkanContext::uploadQueue()).
+    // graphics queue, same as everything else (see VulkanContext::
+    // uploadQueue()).
     VkCommandBufferAllocateInfo cmdAllocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     cmdAllocInfo.commandPool = uploadCommandPool_;
     cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;

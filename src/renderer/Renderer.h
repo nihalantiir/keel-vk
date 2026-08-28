@@ -203,11 +203,10 @@ private:
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers_;
 
-    // Bound to VulkanContext::uploadQueueFamily(): the dedicated transfer
-    // family if the device has one, otherwise the same family as
-    // commandPool_. Used only for construction-time one-shot uploads (the
-    // texture streamer's startup flush, the array, the atlas); never on
-    // the per-frame path.
+    // Same queue family as commandPool_ (see VulkanContext::uploadQueueFamily),
+    // kept separate to isolate construction-time one-shot uploads (the
+    // texture streamer's startup flush, the mesh pool, the array, the
+    // atlas) from the per-frame reused command buffers.
     VkCommandPool uploadCommandPool_ = VK_NULL_HANDLE;
 
     // Signaled by each construction-time GPU upload (MeshPool's cube-mesh

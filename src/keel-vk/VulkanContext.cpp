@@ -261,16 +261,9 @@ QueueFamilyIndices VulkanContext::findQueueFamilies(VkPhysicalDevice device) con
     std::vector<VkQueueFamilyProperties> families(count);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
 
-    // Not an early-exit loop: a dedicated transfer family (TRANSFER set,
-    // GRAPHICS not set) can appear anywhere in the list, including after
-    // the graphics/present families are already found.
     for (uint32_t i = 0; i < count; ++i) {
         if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
             indices.graphicsFamily = i;
-        }
-
-        if ((families[i].queueFlags & VK_QUEUE_TRANSFER_BIT) && !(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
-            indices.dedicatedTransferFamily = i;
         }
 
         VkBool32 presentSupport = VK_FALSE;
@@ -370,9 +363,6 @@ void VulkanContext::pickPhysicalDevice() {
 void VulkanContext::createLogicalDevice() {
     std::set<uint32_t> uniqueFamilies = {queueFamilyIndices_.graphicsFamily.value(),
                                           queueFamilyIndices_.presentFamily.value()};
-    if (queueFamilyIndices_.dedicatedTransferFamily.has_value()) {
-        uniqueFamilies.insert(queueFamilyIndices_.dedicatedTransferFamily.value());
-    }
 
     float priority = 1.0f;
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
@@ -432,9 +422,6 @@ void VulkanContext::createLogicalDevice() {
 
     vkGetDeviceQueue(device_, queueFamilyIndices_.graphicsFamily.value(), 0, &graphicsQueue_);
     vkGetDeviceQueue(device_, queueFamilyIndices_.presentFamily.value(), 0, &presentQueue_);
-    if (queueFamilyIndices_.dedicatedTransferFamily.has_value()) {
-        vkGetDeviceQueue(device_, queueFamilyIndices_.dedicatedTransferFamily.value(), 0, &transferQueue_);
-    }
 
     setDebugObjectName(device_, VK_OBJECT_TYPE_DEVICE, reinterpret_cast<uint64_t>(device_), "keel-vk device");
     if (graphicsQueue_ == presentQueue_) {
@@ -445,10 +432,6 @@ void VulkanContext::createLogicalDevice() {
                             "graphics queue");
         setDebugObjectName(device_, VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(presentQueue_),
                             "present queue");
-    }
-    if (transferQueue_ != VK_NULL_HANDLE) {
-        setDebugObjectName(device_, VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(transferQueue_),
-                            "dedicated transfer queue");
     }
 }
 

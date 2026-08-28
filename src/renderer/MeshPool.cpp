@@ -17,20 +17,10 @@ VkBuffer createDeviceLocalBuffer(keel::VulkanContext& context, VkDeviceSize size
     bufferInfo.size = size;
     bufferInfo.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-    // CONCURRENT when a dedicated transfer queue exists, same reasoning
-    // (and same tradeoff, recorded on the wiki's Rendering page) as every
-    // other construction-time upload target in this renderer: avoids an
-    // explicit queue-family ownership-transfer barrier pair for a buffer
-    // that's only ever written once, at construction.
-    const uint32_t concurrentFamilies[] = {context.queueFamilies().graphicsFamily.value(),
-                                            context.uploadQueueFamily()};
-    if (context.hasDedicatedTransferQueue()) {
-        bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
-        bufferInfo.queueFamilyIndexCount = 2;
-        bufferInfo.pQueueFamilyIndices = concurrentFamilies;
-    } else {
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    }
+    // EXCLUSIVE: this upload and the graphics queue that reads it are the
+    // same queue family (see the wiki's Rendering page for why 0.6.0
+    // dropped the dedicated transfer queue), so no ownership transfer.
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
