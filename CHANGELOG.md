@@ -20,15 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `.github/banner.svg`: a hand-authored isometric cube, hue-distinct
-  faces, matching the actual demo's palette.
-- Bindless texture on the cube: a 16-slot, update-after-bind sampled-image
+- `.github/banner.svg`: a real perspective cube at a fixed rotation,
+  computed from the same camera sense and per-face hue mapping the
+  renderer uses, replacing an earlier flat isometric placeholder.
+- Bindless texture on the cube: an update-after-bind sampled-image
   descriptor array (the device contract already required the feature bits;
   this is the first thing to use them), with one slot filled by a
-  procedurally generated checker texture uploaded through a one-shot
-  transfer. `cube.vert`/`cube.frag` gained a UV attribute and sample the
-  bindless array by push-constant index, modulated by the existing
-  hue-phase color. Overlay shows slots used.
+  checker texture uploaded through a one-shot transfer. `cube.vert`/
+  `cube.frag` gained a UV attribute and sample the bindless array by
+  push-constant index, modulated by the existing hue-phase color. Overlay
+  shows slots used.
 - `shaderSampledImageArrayNonUniformIndexing` added to the required device
   contract: needed to index a bindless array with `nonuniformEXT`, which
   the earlier descriptor-indexing feature bits alone don't cover.
@@ -67,6 +68,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `packages/base/textures/checker.rgba8` (raw RGBA8 bytes, still no
   image-loading library) instead of being generated procedurally.
   `packages/` is copied next to the built executable by CMake.
+- Texture atlas (`src/renderer/Atlas2D`) and texture array
+  (`src/renderer/TextureArray2D`), two more texture-storage paths
+  alongside the bindless array, each suited to a different access
+  pattern: the atlas packs small, differently-sized images into one page
+  with a shelf packer and a UV rect table (for UI/glyphs later); the
+  array holds many same-size tiles as layers of one image (for things
+  like terrain splat layers or animation frames later). Neither is
+  sampled by the cube yet; both are populated at construction to prove
+  the path works.
+- The bindless array (`TextureStreamer`) grew from a single static
+  texture into a real streaming pool: `allocate`/`update`/`free`, a
+  ring of persistently-mapped staging buffers, and per-slot generations
+  so a freed-and-reallocated slot can't be confused with what used to be
+  there. Uploads are queued and drained once per frame
+  (`processUploads`), never blocking the render loop; the only
+  `vkQueueWaitIdle` left in the texture path is a single startup flush
+  before the first frame. The debug overlay's texture-slot selector,
+  "Regenerate active" button, and "Free + reallocate spare slot" button
+  exercise all three live. Capacity grew from 16 to 256 slots.
+- Fixed a real bug caught while testing the above: the startup batch
+  queues more textures than fit in the staging ring before the first
+  flush, and the resulting exception left already-created vertex/index/
+  indirect buffers leaked (their cleanup lives in `~Renderer()`, which
+  never runs on a failed constructor). Fixed by sizing the ring to
+  comfortably exceed the startup batch.
 
 ## [0.1.0] - 2026-08-28
 

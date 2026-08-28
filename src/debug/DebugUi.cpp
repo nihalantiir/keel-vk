@@ -122,6 +122,16 @@ void DebugUi::drawOverlay() {
     ImGui::Separator();
     ImGui::Text("Bindless textures: %u / %u slots used", renderer_.boundTextureCount(),
                 renderer::Renderer::kMaxBindlessTextures);
+    ImGui::SliderInt("Cube texture slot", &renderer_.activeDemoTextureIndex(), 0, renderer_.demoTextureCount() - 1,
+                      "demo slot %d");
+    if (ImGui::Button("Regenerate active (streamed update)")) {
+        renderer_.regenerateActiveTexture();
+    }
+    if (ImGui::Button("Free + reallocate spare slot")) {
+        renderer_.freeAndReallocateSpareTexture();
+    }
+    ImGui::Text("Texture array: %u layers", renderer_.textureArrayLayerCount());
+    ImGui::Text("Atlas: %u rects packed", renderer_.atlasRectCount());
 
     ImGui::Separator();
     ImGui::Checkbox("Show ImGui demo window", &showDemoWindow_);

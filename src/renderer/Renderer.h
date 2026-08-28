@@ -6,8 +6,12 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
+#include "Atlas2D.h"
+#include "TextureStreamer.h"
+
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace keel {
@@ -22,6 +26,8 @@ class DebugUi;
 }
 
 namespace renderer {
+
+class TextureArray2D;
 
 struct Vertex {
     float position[3];
@@ -55,10 +61,20 @@ public:
     // Read-only: the front face's current hue-cycled color, for the overlay.
     glm::vec3 previewColor() const;
 
-    // Bindless texture slots: how many of the fixed-capacity array are
-    // actually registered right now, for the overlay readout.
-    static constexpr uint32_t kMaxBindlessTextures = 16;
-    uint32_t boundTextureCount() const { return 1; }
+    static constexpr uint32_t kMaxBindlessTextures = 256;
+    uint32_t boundTextureCount() const { return textureStreamer_->usedSlots(); }
+
+    // Demo controls for the debug overlay: which of demoTextures_ the cube
+    // currently samples, a way to prove update() streams live, and a way
+    // to prove free()+allocate() cycle a slot's generation. See
+    // Renderer.cpp's createTextureStreamer() for what's registered.
+    int& activeDemoTextureIndex() { return activeDemoTextureIndex_; }
+    int demoTextureCount() const { return static_cast<int>(demoTextures_.size()); }
+    void regenerateActiveTexture();
+    void freeAndReallocateSpareTexture();
+
+    uint32_t textureArrayLayerCount() const;
+    uint32_t atlasRectCount() const;
 
     // ImGui's own pipeline must declare this too: it draws inside the same
     // dynamic rendering scope with a depth attachment bound, and Vulkan
@@ -76,10 +92,7 @@ private:
     void recreateSyncObjectsForSwapchain();
     void destroySyncObjects();
     void createGeometryBuffers();
-    void createTexture();
-    void destroyTexture();
-    void createDescriptors();
-    void destroyDescriptors();
+    void createTextureStreamer();
     void createDepthTarget();
     void destroyDepthTarget();
     void createPipeline();
@@ -116,17 +129,20 @@ private:
     VmaAllocation depthImageAllocation_ = VK_NULL_HANDLE;
     VkImageView depthImageView_ = VK_NULL_HANDLE;
 
-    // The cube's one registered texture, in bindless slot 0. Real bindless
-    // scaffolding (fixed-capacity descriptor array, update-after-bind) even
-    // though only one slot is filled today.
-    VkImage textureImage_ = VK_NULL_HANDLE;
-    VmaAllocation textureImageAllocation_ = VK_NULL_HANDLE;
-    VkImageView textureImageView_ = VK_NULL_HANDLE;
-    VkSampler textureSampler_ = VK_NULL_HANDLE;
+    // The bindless sampled-image array the cube actually samples from
+    // (cube.frag: bindlessTextures[textureIndex]). Owns its own descriptor
+    // set layout/pool/set; Renderer only asks it for those to build the
+    // pipeline layout and bind at draw time.
+    std::unique_ptr<TextureStreamer> textureStreamer_;
+    std::vector<TextureHandle> demoTextures_; // slots 1..N: checker, stripes, gradient, spare
+    int activeDemoTextureIndex_ = 0;
+    uint32_t regenerateCounter_ = 0;
 
-    VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
-    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
-    VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
+    // Constructed, populated, and correctly left unbound to any shader
+    // this landing (see Renderer.cpp's createTextureStreamer): both exist
+    // to prove the path, not because the cube samples them.
+    std::unique_ptr<TextureArray2D> textureArray_;
+    std::unique_ptr<Atlas2D> atlas_;
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

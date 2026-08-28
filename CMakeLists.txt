@@ -162,6 +162,9 @@ set(KEEL_VK_CLIENT_SOURCES
   src/keel-vk/ShaderModule.cpp
   src/keel-vk/VmaImpl.cpp
   src/renderer/Renderer.cpp
+  src/renderer/TextureStreamer.cpp
+  src/renderer/TextureArray2D.cpp
+  src/renderer/Atlas2D.cpp
   src/net/Host.cpp
   src/shared/Vfs.cpp
 )
