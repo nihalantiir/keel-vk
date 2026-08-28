@@ -1,7 +1,7 @@
 # Keel
 
 <p align="center">
-  <img src=".github/banner.svg" alt="keel-vk, a Vulkan 1.3 engine scaffold in C++20" width="100%">
+  <img src=".github/banner.svg" alt="keel-vk, a Vulkan 1.3 engine foundation template in C++20" width="100%">
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -11,23 +11,39 @@
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)](#stack)
 [![Vulkan 1.3](https://img.shields.io/badge/Vulkan-1.3-red)](#stack)
 
-A C++20 Vulkan 1.3 engine scaffold. Successor to
-[simple-vk](https://github.com/nihalantiir/simple-vk). A perspective,
-depth-tested, bindless-textured cube with hue-phased faces, driven by an
-entity's Transform, drawn indirect, with an optional Dear ImGui debug
-overlay. Setup for games and later systems (ECS, networking, content
-packs) to build on top of, not a game itself.
+Built on [simple-vk](https://github.com/nihalantiir/simple-vk)'s Vulkan
+1.3 + SDL3 boilerplate (window, instance/device, swapchain, dynamic
+rendering, optional Dear ImGui). Keel is not a successor that surpasses
+simple-vk and doesn't compete with it: if you want a triangle and a clean
+device, use simple-vk. Keel is a template for a *custom* Vulkan game
+engine - the expensive hardware answers (device contract, bindless/array/
+atlas texture residency, an ECS/net/VFS foundation) already chosen, so a
+voxel engine, a space sim, or a 3D RPG can start in *another* repo without
+re-deciding them.
+
+The executable this repo builds is a contract test, not the product: a
+grey-clear, depth-tested, hue-phased cube with an optional debug overlay.
+If the cube still runs after a change here, the contract held.
 
 ## Stack
 
-- **C++20**
+Inherited from simple-vk / the Vulkan SDK:
+
+- **C++20**, CMake >= 3.24, Ninja
 - **SDL3**, windowing, input, surface creation
 - **Volk**, Vulkan function loading
 - **VMA** (Vulkan Memory Allocator), GPU memory allocation
 - **GLM**, math
-- **EnTT**, the `keel::World` ECS wrap (vendored)
-- **ENet**, the `net::Host` transport wrap (vendored)
-- **Dear ImGui**, debug overlay (vendored, see [Libraries](https://github.com/nihalantiir/keel-vk/wiki/Libraries))
+- **Dynamic rendering** - no `VkRenderPass`/`VkFramebuffer`
+- **Dear ImGui**, optional debug overlay (vendored, see [Libraries](https://github.com/nihalantiir/keel-vk/wiki/Libraries))
+
+What Keel adds on top (the foundation, see [Architecture](https://github.com/nihalantiir/keel-vk/wiki/Architecture)):
+
+- A stricter Vulkan 1.3 device contract (descriptor indexing, timeline
+  semaphores, buffer device address, and more - see
+  [Device contract](https://github.com/nihalantiir/keel-vk/wiki/Device-contract))
+- Bindless + texture-array + atlas residency
+- `keel::World` (EnTT), `keel::Vfs`, `shared::FixedClock`, `net::Host` (ENet)
 
 SDL3/volk/VMA/GLM ship inside the Vulkan SDK, so there's nothing to fetch
 or vendor for those four.
@@ -87,29 +103,32 @@ keel-vk/
 ├── CMakePresets.json
 ├── CHANGELOG.md
 ├── external/             vendored deps (Dear ImGui, EnTT, ENet, fetched by CMake)
-├── packages/             content packs, mounted by keel::Vfs; packages/base/ ships with the engine
+├── packages/             content packs, mounted by keel::Vfs; packages/base/ ships with the template
 ├── scripts/              build/clean helpers for both platforms
 ├── shaders/              GLSL sources, compiled to SPIR-V at build time
 ├── .github/workflows/    CI (configure + build, both ImGui on and off)
 └── src/
-    ├── keel-vk/          Vulkan + SDL bootstrap: Window, VulkanContext, Swapchain, ShaderModule, ...
-    ├── renderer/         the cube: pipeline, depth, bindless textures, indirect draw, color phase
-    ├── debug/            Dear ImGui overlay, gated by KEEL_VK_IMGUI
-    ├── shared/            keel::World (EnTT wrap), Clock, Vfs: engine-level, not Vulkan-specific
-    ├── net/              net::Host, a transport-only ENet wrap
-    ├── client/           the cube executable (keel-vk)
-    ├── server/           headless, ENet only, no Vulkan/SDL dependency
+    ├── keel-vk/          boilerplate layer: simple-vk's bootstrap, absorbed and tightened
+    ├── renderer/         foundation: pipeline, depth, bindless/array/atlas textures, indirect draw
+    ├── debug/            Dear ImGui overlay, gated by KEEL_VK_IMGUI (debug only, never the product UI)
+    ├── shared/           foundation: keel::World (EnTT), keel::Vfs, shared::FixedClock
+    ├── net/              foundation: net::Host, a transport-only ENet wrap
+    ├── client/           contract-test composition: the cube executable (keel-vk)
+    ├── server/           headless transport stub, no Vulkan/SDL dependency
     └── samples/          reserved for future standalone samples
 ```
 
-`src/keel-vk/` stays generic, `src/renderer/` builds on it to draw,
-`src/debug/` overlays introspection on top, `src/shared/` and `src/net/`
-are engine-level utilities neither of them needs. See
+`src/keel-vk/` is boilerplate, not "the engine": it stays generic and
+never learns about meshes, instances, packs, ENet, or EnTT. `src/renderer/`,
+`src/shared/`, and `src/net/` are the foundation layer this template adds.
+A game built on Keel lives in its *own* repo, not inside this one. See
 [Architecture](https://github.com/nihalantiir/keel-vk/wiki/Architecture).
 
 ## Documentation
 
-Deeper docs live on the [wiki](https://github.com/nihalantiir/keel-vk/wiki):
+Deeper docs live on the [wiki](https://github.com/nihalantiir/keel-vk/wiki).
+For the boilerplate layer itself, see
+[simple-vk's wiki](https://github.com/nihalantiir/simple-vk/wiki).
 
 - [Home](https://github.com/nihalantiir/keel-vk/wiki)
 - [Build](https://github.com/nihalantiir/keel-vk/wiki/Build)
