@@ -201,7 +201,10 @@ foreach(shader ${SHADER_SOURCES})
   add_custom_command(
     OUTPUT "${shader_output}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUTPUT_DIR}"
-    COMMAND ${GLSLC_COMMAND} "${CMAKE_SOURCE_DIR}/${shader}" -o "${shader_output}"
+    # --target-env=vulkan1.3 so GL_EXT_nonuniform_qualifier and the runtime
+    # descriptor array in cube.frag get SPIR-V that actually matches the
+    # device contract (descriptor indexing), not the vulkan1.0 default.
+    COMMAND ${GLSLC_COMMAND} --target-env=vulkan1.3 "${CMAKE_SOURCE_DIR}/${shader}" -o "${shader_output}"
     DEPENDS "${CMAKE_SOURCE_DIR}/${shader}"
     COMMENT "Compiling shader ${shader}"
     VERBATIM

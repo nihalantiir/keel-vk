@@ -17,6 +17,7 @@
 #include <SDL3/SDL.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iterator>
 #include <stdexcept>
@@ -31,37 +32,39 @@ namespace {
 // from outside; the pipeline's frontFace matches that directly (see
 // createPipeline) since the projection's Y-flip affects near and far faces
 // identically and doesn't change which triangles should be culled.
+// uv follows the same (0,0),(1,0),(1,1),(0,1) order as each face's 4
+// vertices, so the checker texture reads as one full tile per face.
 constexpr std::array<Vertex, 24> kVertices = {{
     // +Z front, hue 0
-    {{-0.5f, -0.5f, 0.5f}, 0.0f},
-    {{0.5f, -0.5f, 0.5f}, 0.0f},
-    {{0.5f, 0.5f, 0.5f}, 0.0f},
-    {{-0.5f, 0.5f, 0.5f}, 0.0f},
+    {{-0.5f, -0.5f, 0.5f}, 0.0f, {0.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.5f}, 0.0f, {1.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.5f}, 0.0f, {1.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.5f}, 0.0f, {0.0f, 1.0f}},
     // -Z back, hue 60
-    {{0.5f, -0.5f, -0.5f}, 60.0f},
-    {{-0.5f, -0.5f, -0.5f}, 60.0f},
-    {{-0.5f, 0.5f, -0.5f}, 60.0f},
-    {{0.5f, 0.5f, -0.5f}, 60.0f},
+    {{0.5f, -0.5f, -0.5f}, 60.0f, {0.0f, 0.0f}},
+    {{-0.5f, -0.5f, -0.5f}, 60.0f, {1.0f, 0.0f}},
+    {{-0.5f, 0.5f, -0.5f}, 60.0f, {1.0f, 1.0f}},
+    {{0.5f, 0.5f, -0.5f}, 60.0f, {0.0f, 1.0f}},
     // +X right, hue 120
-    {{0.5f, -0.5f, 0.5f}, 120.0f},
-    {{0.5f, -0.5f, -0.5f}, 120.0f},
-    {{0.5f, 0.5f, -0.5f}, 120.0f},
-    {{0.5f, 0.5f, 0.5f}, 120.0f},
+    {{0.5f, -0.5f, 0.5f}, 120.0f, {0.0f, 0.0f}},
+    {{0.5f, -0.5f, -0.5f}, 120.0f, {1.0f, 0.0f}},
+    {{0.5f, 0.5f, -0.5f}, 120.0f, {1.0f, 1.0f}},
+    {{0.5f, 0.5f, 0.5f}, 120.0f, {0.0f, 1.0f}},
     // -X left, hue 180
-    {{-0.5f, -0.5f, -0.5f}, 180.0f},
-    {{-0.5f, -0.5f, 0.5f}, 180.0f},
-    {{-0.5f, 0.5f, 0.5f}, 180.0f},
-    {{-0.5f, 0.5f, -0.5f}, 180.0f},
+    {{-0.5f, -0.5f, -0.5f}, 180.0f, {0.0f, 0.0f}},
+    {{-0.5f, -0.5f, 0.5f}, 180.0f, {1.0f, 0.0f}},
+    {{-0.5f, 0.5f, 0.5f}, 180.0f, {1.0f, 1.0f}},
+    {{-0.5f, 0.5f, -0.5f}, 180.0f, {0.0f, 1.0f}},
     // +Y top, hue 240
-    {{-0.5f, 0.5f, -0.5f}, 240.0f},
-    {{-0.5f, 0.5f, 0.5f}, 240.0f},
-    {{0.5f, 0.5f, 0.5f}, 240.0f},
-    {{0.5f, 0.5f, -0.5f}, 240.0f},
+    {{-0.5f, 0.5f, -0.5f}, 240.0f, {0.0f, 0.0f}},
+    {{-0.5f, 0.5f, 0.5f}, 240.0f, {1.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.5f}, 240.0f, {1.0f, 1.0f}},
+    {{0.5f, 0.5f, -0.5f}, 240.0f, {0.0f, 1.0f}},
     // -Y bottom, hue 300
-    {{-0.5f, -0.5f, 0.5f}, 300.0f},
-    {{-0.5f, -0.5f, -0.5f}, 300.0f},
-    {{0.5f, -0.5f, -0.5f}, 300.0f},
-    {{0.5f, -0.5f, 0.5f}, 300.0f},
+    {{-0.5f, -0.5f, 0.5f}, 300.0f, {0.0f, 0.0f}},
+    {{-0.5f, -0.5f, -0.5f}, 300.0f, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, -0.5f}, 300.0f, {1.0f, 1.0f}},
+    {{0.5f, -0.5f, 0.5f}, 300.0f, {0.0f, 1.0f}},
 }};
 
 constexpr std::array<uint32_t, 36> kIndices = {{
@@ -77,7 +80,29 @@ struct PushConstants {
     glm::mat4 mvp;
     float time;
     float phaseSpeed;
+    uint32_t textureIndex;
 };
+
+// 8x8 checkerboard, generated rather than loaded: a real bindless texture
+// with no image-loading dependency yet (see docs/wiki Libraries - stb_image
+// is deliberately not in this landing).
+constexpr uint32_t kCheckerSize = 8;
+
+std::array<uint8_t, kCheckerSize * kCheckerSize * 4> makeCheckerPixels() {
+    std::array<uint8_t, kCheckerSize * kCheckerSize * 4> pixels{};
+    for (uint32_t y = 0; y < kCheckerSize; ++y) {
+        for (uint32_t x = 0; x < kCheckerSize; ++x) {
+            const bool light = ((x + y) % 2) == 0;
+            const uint8_t value = light ? 255 : 170;
+            const size_t offset = (y * kCheckerSize + x) * 4;
+            pixels[offset + 0] = value;
+            pixels[offset + 1] = value;
+            pixels[offset + 2] = value;
+            pixels[offset + 3] = 255;
+        }
+    }
+    return pixels;
+}
 
 glm::vec3 hsv2rgb(float hueDegrees, float saturation, float value) {
     const float h = std::fmod(std::fmod(hueDegrees, 360.0f) + 360.0f, 360.0f) / 60.0f;
@@ -101,6 +126,8 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
     createCommandBuffers();
     createSyncObjects();
     createGeometryBuffers();
+    createTexture();
+    createDescriptors();
     createDepthTarget();
     createPipeline();
 }
@@ -116,6 +143,8 @@ Renderer::~Renderer() {
     }
 
     destroyDepthTarget();
+    destroyDescriptors();
+    destroyTexture();
 
     if (indirectBuffer_ != VK_NULL_HANDLE) {
         vmaDestroyBuffer(context_.allocator(), indirectBuffer_, indirectBufferAllocation_);
@@ -271,6 +300,219 @@ void Renderer::createGeometryBuffers() {
                                                         "cube indirect draw buffer");
 }
 
+void Renderer::createTexture() {
+    const std::array<uint8_t, kCheckerSize * kCheckerSize * 4> pixels = makeCheckerPixels();
+    const VkDeviceSize byteSize = pixels.size();
+
+    VmaAllocation stagingAllocation = VK_NULL_HANDLE;
+    VkBuffer stagingBuffer = createDeviceLocalBufferWithData(context_, pixels.data(), byteSize,
+                                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT, stagingAllocation,
+                                                               "checker texture staging buffer");
+
+    VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = {kCheckerSize, kCheckerSize, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+
+    keel::vkCheck(vmaCreateImage(context_.allocator(), &imageInfo, &allocInfo, &textureImage_,
+                                  &textureImageAllocation_, nullptr),
+                  "Failed to create checker texture image");
+    keel::setDebugObjectName(context_.device(), VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(textureImage_),
+                              "checker texture");
+
+    // One-shot upload: this texture is static and tiny, so a dedicated
+    // transfer path isn't worth it yet (see Renderer opinions in the wiki's
+    // Rendering page - a transfer queue is reserved, not required, for a
+    // static asset like this one).
+    VkCommandBufferAllocateInfo cmdAllocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cmdAllocInfo.commandPool = commandPool_;
+    cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmdAllocInfo.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    keel::vkCheck(vkAllocateCommandBuffers(context_.device(), &cmdAllocInfo, &cmd),
+                  "Failed to allocate one-shot upload command buffer");
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    keel::vkCheck(vkBeginCommandBuffer(cmd, &beginInfo), "Failed to begin upload command buffer");
+
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    VkImageMemoryBarrier2 toTransferDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    toTransferDst.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+    toTransferDst.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    toTransferDst.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    toTransferDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toTransferDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toTransferDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransferDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransferDst.image = textureImage_;
+    toTransferDst.subresourceRange = range;
+
+    VkDependencyInfo toTransferDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    toTransferDependency.imageMemoryBarrierCount = 1;
+    toTransferDependency.pImageMemoryBarriers = &toTransferDst;
+    vkCmdPipelineBarrier2(cmd, &toTransferDependency);
+
+    VkBufferImageCopy copyRegion{};
+    copyRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copyRegion.imageExtent = {kCheckerSize, kCheckerSize, 1};
+    vkCmdCopyBufferToImage(cmd, stagingBuffer, textureImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+    VkImageMemoryBarrier2 toShaderRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    toShaderRead.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    toShaderRead.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    toShaderRead.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    toShaderRead.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    toShaderRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toShaderRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toShaderRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toShaderRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toShaderRead.image = textureImage_;
+    toShaderRead.subresourceRange = range;
+
+    VkDependencyInfo toShaderReadDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    toShaderReadDependency.imageMemoryBarrierCount = 1;
+    toShaderReadDependency.pImageMemoryBarriers = &toShaderRead;
+    vkCmdPipelineBarrier2(cmd, &toShaderReadDependency);
+
+    keel::vkCheck(vkEndCommandBuffer(cmd), "Failed to end upload command buffer");
+
+    VkCommandBufferSubmitInfo cmdSubmitInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdSubmitInfo.commandBuffer = cmd;
+    VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submitInfo.commandBufferInfoCount = 1;
+    submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
+    keel::vkCheck(vkQueueSubmit2(context_.graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE),
+                  "Failed to submit texture upload");
+    keel::vkCheck(vkQueueWaitIdle(context_.graphicsQueue()), "Failed to wait for texture upload");
+
+    vkFreeCommandBuffers(context_.device(), commandPool_, 1, &cmd);
+    vmaDestroyBuffer(context_.allocator(), stagingBuffer, stagingAllocation);
+
+    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = textureImage_;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange = range;
+    keel::vkCheck(vkCreateImageView(context_.device(), &viewInfo, nullptr, &textureImageView_),
+                  "Failed to create checker texture view");
+
+    VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.maxLod = 0.0f;
+    keel::vkCheck(vkCreateSampler(context_.device(), &samplerInfo, nullptr, &textureSampler_),
+                  "Failed to create checker texture sampler");
+}
+
+void Renderer::destroyTexture() {
+    if (textureSampler_ != VK_NULL_HANDLE) {
+        vkDestroySampler(context_.device(), textureSampler_, nullptr);
+        textureSampler_ = VK_NULL_HANDLE;
+    }
+    if (textureImageView_ != VK_NULL_HANDLE) {
+        vkDestroyImageView(context_.device(), textureImageView_, nullptr);
+        textureImageView_ = VK_NULL_HANDLE;
+    }
+    if (textureImage_ != VK_NULL_HANDLE) {
+        vmaDestroyImage(context_.allocator(), textureImage_, textureImageAllocation_);
+        textureImage_ = VK_NULL_HANDLE;
+    }
+}
+
+void Renderer::createDescriptors() {
+    // A fixed-capacity, update-after-bind sampled-image array: the device
+    // contract already requires update-after-bind, partially-bound, and
+    // variable-descriptor-count support, so this is the first thing to
+    // actually use it. Only one slot is filled today; the rest stay unused
+    // until a content-pack texture loader exists.
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = kMaxBindlessTextures;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    const VkDescriptorBindingFlags bindingFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                                                    VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+                                                    VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+    bindingFlagsInfo.bindingCount = 1;
+    bindingFlagsInfo.pBindingFlags = &bindingFlags;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.pNext = &bindingFlagsInfo;
+    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &binding;
+    keel::vkCheck(vkCreateDescriptorSetLayout(context_.device(), &layoutInfo, nullptr, &descriptorSetLayout_),
+                  "Failed to create bindless descriptor set layout");
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    keel::vkCheck(vkCreateDescriptorPool(context_.device(), &poolInfo, nullptr, &descriptorPool_),
+                  "Failed to create bindless descriptor pool");
+
+    const uint32_t variableCount = 1; // one texture registered so far
+    VkDescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO};
+    variableCountInfo.descriptorSetCount = 1;
+    variableCountInfo.pDescriptorCounts = &variableCount;
+
+    VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocInfo.pNext = &variableCountInfo;
+    allocInfo.descriptorPool = descriptorPool_;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &descriptorSetLayout_;
+    keel::vkCheck(vkAllocateDescriptorSets(context_.device(), &allocInfo, &descriptorSet_),
+                  "Failed to allocate bindless descriptor set");
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = textureSampler_;
+    imageInfo.imageView = textureImageView_;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = descriptorSet_;
+    write.dstBinding = 0;
+    write.dstArrayElement = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(context_.device(), 1, &write, 0, nullptr);
+}
+
+void Renderer::destroyDescriptors() {
+    // Freeing the pool also frees the set allocated from it.
+    if (descriptorPool_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(context_.device(), descriptorPool_, nullptr);
+        descriptorPool_ = VK_NULL_HANDLE;
+        descriptorSet_ = VK_NULL_HANDLE;
+    }
+    if (descriptorSetLayout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(context_.device(), descriptorSetLayout_, nullptr);
+        descriptorSetLayout_ = VK_NULL_HANDLE;
+    }
+}
+
 void Renderer::createDepthTarget() {
     const VkExtent2D extent = swapchain_.extent();
 
@@ -346,6 +588,7 @@ void Renderer::createPipeline() {
     const VkVertexInputAttributeDescription attributes[] = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
         {1, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, baseHueDegrees)},
+        {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)},
     };
 
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -399,12 +642,17 @@ void Renderer::createPipeline() {
     colorBlend.attachmentCount = 1;
     colorBlend.pAttachments = &colorBlendAttachment;
 
+    // Covers both stages: mvp/time/phaseSpeed are read in the vertex shader,
+    // textureIndex in the fragment shader, all from the one push constant
+    // block declared identically in both.
     VkPushConstantRange pushConstantRange{};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
     pushConstantRange.size = sizeof(PushConstants);
 
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &descriptorSetLayout_;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstantRange;
     keel::vkCheck(vkCreatePipelineLayout(context_.device(), &layoutInfo, nullptr, &pipelineLayout_),
@@ -526,7 +774,11 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
     pushConstants.mvp = proj * view * model;
     pushConstants.time = elapsedTimeSeconds_;
     pushConstants.phaseSpeed = phaseSpeedDegPerSec_;
-    vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants), &pushConstants);
+    pushConstants.textureIndex = 0; // the checker texture's bindless slot
+    vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                        sizeof(pushConstants), &pushConstants);
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
 
     const VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);

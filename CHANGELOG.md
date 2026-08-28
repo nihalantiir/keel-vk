@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `.github/banner.svg`: a hand-authored isometric cube, hue-distinct
   faces, matching the actual demo's palette.
+- Bindless texture on the cube: a 16-slot, update-after-bind sampled-image
+  descriptor array (the device contract already required the feature bits;
+  this is the first thing to use them), with one slot filled by a
+  procedurally generated checker texture uploaded through a one-shot
+  transfer. `cube.vert`/`cube.frag` gained a UV attribute and sample the
+  bindless array by push-constant index, modulated by the existing
+  hue-phase color. Overlay shows slots used.
+- `shaderSampledImageArrayNonUniformIndexing` added to the required device
+  contract: needed to index a bindless array with `nonuniformEXT`, which
+  the earlier descriptor-indexing feature bits alone don't cover.
+- Shader compilation now passes `--target-env=vulkan1.3` to `glslc`.
 
 ## [0.1.0] - 2026-08-28
 

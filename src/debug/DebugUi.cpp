@@ -120,6 +120,10 @@ void DebugUi::drawOverlay() {
                        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoDragDrop);
 
     ImGui::Separator();
+    ImGui::Text("Bindless textures: %u / %u slots used", renderer_.boundTextureCount(),
+                renderer::Renderer::kMaxBindlessTextures);
+
+    ImGui::Separator();
     ImGui::Checkbox("Show ImGui demo window", &showDemoWindow_);
 
     ImGui::End();

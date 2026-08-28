@@ -24,6 +24,7 @@ namespace renderer {
 struct Vertex {
     float position[3];
     float baseHueDegrees;
+    float uv[2];
 };
 
 class Renderer {
@@ -43,6 +44,11 @@ public:
     // Read-only: the front face's current hue-cycled color, for the overlay.
     glm::vec3 previewColor() const;
 
+    // Bindless texture slots: how many of the fixed-capacity array are
+    // actually registered right now, for the overlay readout.
+    static constexpr uint32_t kMaxBindlessTextures = 16;
+    uint32_t boundTextureCount() const { return 1; }
+
     // ImGui's own pipeline must declare this too: it draws inside the same
     // dynamic rendering scope with a depth attachment bound, and Vulkan
     // requires a bound pipeline's declared depth format to match even when
@@ -59,6 +65,10 @@ private:
     void recreateSyncObjectsForSwapchain();
     void destroySyncObjects();
     void createGeometryBuffers();
+    void createTexture();
+    void destroyTexture();
+    void createDescriptors();
+    void destroyDescriptors();
     void createDepthTarget();
     void destroyDepthTarget();
     void createPipeline();
@@ -93,6 +103,18 @@ private:
     VkImage depthImage_ = VK_NULL_HANDLE;
     VmaAllocation depthImageAllocation_ = VK_NULL_HANDLE;
     VkImageView depthImageView_ = VK_NULL_HANDLE;
+
+    // The cube's one registered texture, in bindless slot 0. Real bindless
+    // scaffolding (fixed-capacity descriptor array, update-after-bind) even
+    // though only one slot is filled today.
+    VkImage textureImage_ = VK_NULL_HANDLE;
+    VmaAllocation textureImageAllocation_ = VK_NULL_HANDLE;
+    VkImageView textureImageView_ = VK_NULL_HANDLE;
+    VkSampler textureSampler_ = VK_NULL_HANDLE;
+
+    VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

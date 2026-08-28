@@ -91,6 +91,11 @@ std::vector<std::string> missingRequirements(VkPhysicalDevice device, VkSurfaceK
     if (!chain.features12.descriptorBindingStorageBufferUpdateAfterBind)
         missing.push_back("descriptorBindingStorageBufferUpdateAfterBind");
     if (!chain.features12.scalarBlockLayout) missing.push_back("scalarBlockLayout");
+    // Required to actually index the bindless sampled-image array
+    // (GL_EXT_nonuniform_qualifier / nonuniformEXT in shader code); the
+    // descriptor-indexing bits above only make the array itself legal.
+    if (!chain.features12.shaderSampledImageArrayNonUniformIndexing)
+        missing.push_back("shaderSampledImageArrayNonUniformIndexing");
 
     // shaderDrawParameters was promoted to core in Vulkan 1.1, not 1.2 - it
     // lives in VkPhysicalDeviceVulkan11Features even though the rest of the
@@ -374,6 +379,7 @@ void VulkanContext::createLogicalDevice() {
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
     features12.scalarBlockLayout = VK_TRUE;
+    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
     features12.hostQueryReset = hostQueryResetSupported_ ? VK_TRUE : VK_FALSE; // optional, reserved for GPU timing
 
     VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};

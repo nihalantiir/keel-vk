@@ -2,13 +2,16 @@
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in float inBaseHue;
+layout(location = 2) in vec2 inUv;
 
 layout(location = 0) out vec3 fragColor;
+layout(location = 1) out vec2 fragUv;
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
     float time;
     float phaseSpeed;
+    uint textureIndex;
 } pc;
 
 // Standard HSV to RGB, hue in degrees, saturation and value in [0,1].
@@ -29,4 +32,5 @@ vec3 hsv2rgb(float hueDegrees, float saturation, float value) {
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
     fragColor = hsv2rgb(inBaseHue + pc.time * pc.phaseSpeed, 0.75, 1.0);
+    fragUv = inUv;
 }
