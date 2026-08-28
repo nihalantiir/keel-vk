@@ -13,9 +13,10 @@
 
 A C++20 Vulkan 1.3 engine scaffold. Successor to
 [simple-vk](https://github.com/nihalantiir/simple-vk). A perspective,
-depth-tested cube with hue-phased faces, drawn indirect, with an optional
-Dear ImGui debug overlay. Setup for games and later systems to build on top
-of, not a game itself.
+depth-tested, bindless-textured cube with hue-phased faces, driven by an
+entity's Transform, drawn indirect, with an optional Dear ImGui debug
+overlay. Setup for games and later systems (ECS, networking, content
+packs) to build on top of, not a game itself.
 
 ## Stack
 
@@ -24,6 +25,8 @@ of, not a game itself.
 - **Volk**, Vulkan function loading
 - **VMA** (Vulkan Memory Allocator), GPU memory allocation
 - **GLM**, math
+- **EnTT**, the `keel::World` ECS wrap (vendored)
+- **ENet**, the `net::Host` transport wrap (vendored)
 - **Dear ImGui**, debug overlay (vendored, see [Libraries](https://github.com/nihalantiir/keel-vk/wiki/Libraries))
 
 SDL3/volk/VMA/GLM ship inside the Vulkan SDK, so there's nothing to fetch
@@ -83,22 +86,25 @@ keel-vk/
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── CHANGELOG.md
-├── external/             vendored deps (Dear ImGui, fetched by CMake)
-├── packages/             reserved for a future content-pack format
+├── external/             vendored deps (Dear ImGui, EnTT, ENet, fetched by CMake)
+├── packages/             content packs, mounted by keel::Vfs; packages/base/ ships with the engine
 ├── scripts/              build/clean helpers for both platforms
 ├── shaders/              GLSL sources, compiled to SPIR-V at build time
 ├── .github/workflows/    CI (configure + build, both ImGui on and off)
 └── src/
     ├── keel-vk/          Vulkan + SDL bootstrap: Window, VulkanContext, Swapchain, ShaderModule, ...
-    ├── renderer/         the cube: pipeline, depth, indirect draw, rotation, color phase
+    ├── renderer/         the cube: pipeline, depth, bindless textures, indirect draw, color phase
     ├── debug/            Dear ImGui overlay, gated by KEEL_VK_IMGUI
+    ├── shared/            keel::World (EnTT wrap), Clock, Vfs: engine-level, not Vulkan-specific
+    ├── net/              net::Host, a transport-only ENet wrap
     ├── client/           the cube executable (keel-vk)
-    ├── server/           headless stub, no Vulkan dependency, reserved for keel-net
+    ├── server/           headless, ENet only, no Vulkan/SDL dependency
     └── samples/          reserved for future standalone samples
 ```
 
 `src/keel-vk/` stays generic, `src/renderer/` builds on it to draw,
-`src/debug/` overlays introspection on top. See
+`src/debug/` overlays introspection on top, `src/shared/` and `src/net/`
+are engine-level utilities neither of them needs. See
 [Architecture](https://github.com/nihalantiir/keel-vk/wiki/Architecture).
 
 ## Documentation
