@@ -92,6 +92,7 @@ int main(int argc, char** argv) {
                         break;
                 }
             }
+            const client::Axes axes = actionMap.consumeAxes();
 
             int width = 0, height = 0;
             window.getFramebufferSize(width, height);
@@ -141,9 +142,10 @@ int main(int argc, char** argv) {
             renderer.setModel(keel::toMatrix(renderTransform));
 
 #if KEEL_VK_IMGUI
-            debugUi.beginFrame();
+            debugUi.beginFrame(axes.mouseDeltaX, axes.mouseDeltaY, axes.moveX, axes.moveY);
             renderer.drawFrame(&debugUi);
 #else
+            (void)axes; // nothing to feed it to without the overlay
             renderer.drawFrame();
 #endif
             window.updateTitle(deltaTime);

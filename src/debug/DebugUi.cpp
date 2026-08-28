@@ -89,7 +89,12 @@ void DebugUi::processEvent(const SDL_Event& event) {
     ImGui_ImplSDL3_ProcessEvent(&event);
 }
 
-void DebugUi::beginFrame() {
+void DebugUi::beginFrame(float mouseDeltaX, float mouseDeltaY, float moveX, float moveY) {
+    lastMouseDeltaX_ = mouseDeltaX;
+    lastMouseDeltaY_ = mouseDeltaY;
+    lastMoveX_ = moveX;
+    lastMoveY_ = moveY;
+
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
@@ -125,6 +130,10 @@ void DebugUi::drawOverlay() {
     ImGui::DragFloat3("Origin (floating-origin offset)", &camera.origin.x, 0.1f);
     ImGui::SliderFloat("Camera distance (dolly)", &renderer_.cameraDistance(), 1.0f, 6.0f);
     ImGui::TextDisabled("Dolly in to shrink frustum coverage - watch drawn/instances below change.");
+
+    ImGui::Text("Axes: mouse (%.1f, %.1f)  move (%.0f, %.0f)", lastMouseDeltaX_, lastMouseDeltaY_, lastMoveX_,
+                lastMoveY_);
+    ImGui::TextDisabled("Raw client::Axes data - no camera controller reads these yet.");
 
     ImGui::Separator();
     ImGui::ColorEdit3("Clear color", renderer_.clearColor());
