@@ -5,6 +5,7 @@
 #include "../renderer/Renderer.h"
 #include "../shared/Clock.h"
 #include "../shared/Components.h"
+#include "../shared/Vfs.h"
 #include "../shared/World.h"
 #include "ActionMap.h"
 
@@ -71,9 +72,10 @@ int main(int argc, char** argv) {
         }
 
         keel::Window window("keel-vk: working (v0.1.0)", 1280, 720);
+        keel::Vfs vfs; // mounts packages/ next to the executable
         keel::VulkanContext context(window);
         keel::Swapchain swapchain(context, window);
-        renderer::Renderer renderer(context, swapchain, window);
+        renderer::Renderer renderer(context, swapchain, window, vfs);
 #if KEEL_VK_IMGUI
         debug::DebugUi debugUi(context, swapchain, window, renderer);
 #endif

@@ -59,6 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a real bug caught while testing the above: `Host::service()`'s
   event-drain loop never re-polled `enet_host_service`, so it would only
   ever see the first event per call (or hang draining a stale one).
+- `keel::Vfs` (`src/shared/Vfs.h`), a content-pack VFS: mounts every
+  subdirectory of `<SDL_GetBasePath()>packages/` with a `package.json` at
+  startup, and resolves relative paths against mounted packages.
+  `packages/base/package.json` is the first real package, and the cube's
+  checker texture now loads through the VFS from
+  `packages/base/textures/checker.rgba8` (raw RGBA8 bytes, still no
+  image-loading library) instead of being generated procedurally.
+  `packages/` is copied next to the built executable by CMake.
 
 ## [0.1.0] - 2026-08-28
 

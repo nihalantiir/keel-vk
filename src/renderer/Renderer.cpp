@@ -6,6 +6,7 @@
 #include "../keel-vk/VkCheck.h"
 #include "../keel-vk/VulkanContext.h"
 #include "../keel-vk/Window.h"
+#include "../shared/Vfs.h"
 
 #if KEEL_VK_IMGUI
 #include "../debug/DebugUi.h"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -83,23 +85,23 @@ struct PushConstants {
     uint32_t textureIndex;
 };
 
-// 8x8 checkerboard, generated rather than loaded: a real bindless texture
-// with no image-loading dependency yet (see docs/wiki Libraries - stb_image
-// is deliberately not in this landing).
+// 8x8 checkerboard, loaded from the base content pack as raw RGBA8 bytes:
+// no image-loading dependency (see the wiki's Libraries page - stb_image
+// is deliberately not in this landing), just a format known ahead of time.
 constexpr uint32_t kCheckerSize = 8;
 
-std::array<uint8_t, kCheckerSize * kCheckerSize * 4> makeCheckerPixels() {
+std::array<uint8_t, kCheckerSize * kCheckerSize * 4> loadCheckerPixels(keel::Vfs& vfs) {
+    const std::string path = vfs.resolve("textures/checker.rgba8");
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open checker texture: " + path);
+    }
+
     std::array<uint8_t, kCheckerSize * kCheckerSize * 4> pixels{};
-    for (uint32_t y = 0; y < kCheckerSize; ++y) {
-        for (uint32_t x = 0; x < kCheckerSize; ++x) {
-            const bool light = ((x + y) % 2) == 0;
-            const uint8_t value = light ? 255 : 170;
-            const size_t offset = (y * kCheckerSize + x) * 4;
-            pixels[offset + 0] = value;
-            pixels[offset + 1] = value;
-            pixels[offset + 2] = value;
-            pixels[offset + 3] = 255;
-        }
+    file.read(reinterpret_cast<char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+    if (file.gcount() != static_cast<std::streamsize>(pixels.size())) {
+        throw std::runtime_error("Checker texture has the wrong size: " + path);
     }
     return pixels;
 }
@@ -120,8 +122,8 @@ glm::vec3 hsv2rgb(float hueDegrees, float saturation, float value) {
 
 } // namespace
 
-Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window)
-    : context_(context), swapchain_(swapchain), window_(window) {
+Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window, keel::Vfs& vfs)
+    : context_(context), swapchain_(swapchain), window_(window), vfs_(vfs) {
     createCommandPool();
     createCommandBuffers();
     createSyncObjects();
@@ -301,7 +303,7 @@ void Renderer::createGeometryBuffers() {
 }
 
 void Renderer::createTexture() {
-    const std::array<uint8_t, kCheckerSize * kCheckerSize * 4> pixels = makeCheckerPixels();
+    const std::array<uint8_t, kCheckerSize * kCheckerSize * 4> pixels = loadCheckerPixels(vfs_);
     const VkDeviceSize byteSize = pixels.size();
 
     VmaAllocation stagingAllocation = VK_NULL_HANDLE;

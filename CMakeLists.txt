@@ -163,6 +163,7 @@ set(KEEL_VK_CLIENT_SOURCES
   src/keel-vk/VmaImpl.cpp
   src/renderer/Renderer.cpp
   src/net/Host.cpp
+  src/shared/Vfs.cpp
 )
 if(KEEL_VK_IMGUI)
   list(APPEND KEEL_VK_CLIENT_SOURCES src/debug/DebugUi.cpp)
@@ -249,6 +250,15 @@ endforeach()
 
 add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
 add_dependencies(keel-vk shaders)
+
+# --- Copy packages/ next to the executable: keel::Vfs mounts it relative
+# to SDL_GetBasePath(), which is the executable's own directory. ---
+add_custom_command(TARGET keel-vk POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/packages"
+    "$<TARGET_FILE_DIR:keel-vk>/packages"
+  COMMENT "Copying packages/ next to the executable"
+)
 
 # --- Windows: copy SDL3.dll next to the built executable ---
 if(WIN32)

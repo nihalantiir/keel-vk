@@ -14,6 +14,7 @@ namespace keel {
 class VulkanContext;
 class Swapchain;
 class Window;
+class Vfs;
 } // namespace keel
 
 namespace debug {
@@ -30,7 +31,7 @@ struct Vertex {
 
 class Renderer {
 public:
-    Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window);
+    Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window, keel::Vfs& vfs);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
@@ -87,6 +88,7 @@ private:
     keel::VulkanContext& context_;
     keel::Swapchain& swapchain_;
     keel::Window& window_;
+    keel::Vfs& vfs_;
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers_;
