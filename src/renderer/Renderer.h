@@ -52,9 +52,19 @@ public:
     float* clearColor() { return clearColor_; }
     float& phaseSpeed() { return phaseSpeedDegPerSec_; }
 
-    // Freezes hue phase (elapsed time stops advancing) when true. Driven
-    // by client::ActionMap's Pause action.
+    // Freezes hue phase and satellite orbiting (setSimTime stops changing)
+    // when true. Driven by client::ActionMap's Pause action; main.cpp
+    // gates its own sim-time accumulator on the same flag, so hue phase
+    // and the cube's rotation (shared::FixedClock, also gated on this)
+    // pause together instead of drifting apart.
     bool& paused() { return paused_; }
+
+    // The renderer's one sim-time clock: hue phase and satellite orbiting
+    // both read this, not a second SDL timer of their own. main.cpp calls
+    // this once per frame with the same accumulator that gates
+    // shared::FixedClock (see the wiki's Rendering page for why this
+    // used to be two separate clocks and isn't anymore).
+    void setSimTime(float seconds) { elapsedTimeSeconds_ = seconds; }
 
     // The cube's model matrix, extracted from a keel::World entity's
     // Transform each frame (see src/client/main.cpp). Identity until the
@@ -86,6 +96,21 @@ public:
     int demoTextureCount() const { return static_cast<int>(demoTextures_.size()); }
     void regenerateActiveTexture();
     void freeAndReallocateSpareTexture();
+
+    // Real VK_EXT_memory_budget numbers (see VulkanContext::
+    // memoryBudgetSupported), for the overlay's "VRAM" line - purely
+    // informational, never the eviction trigger. demoResidentBytes/
+    // demoResidentCapBytes/evictionCount are the actual eviction state:
+    // see maybeEvictDemoTexture in Renderer.cpp and the wiki's Rendering
+    // page for why the cap is a small, deliberately artificial constant
+    // rather than a fraction of the real device budget.
+    bool memoryBudgetSupported() const;
+    uint64_t deviceMemoryBudgetBytes() const;
+    uint64_t deviceMemoryUsageBytes() const;
+    VkDeviceSize demoResidentBytes() const;
+    static constexpr VkDeviceSize kDemoResidentCapBytes = 2048;
+    VkDeviceSize demoResidentCapBytes() const { return kDemoResidentCapBytes; }
+    uint32_t evictionCount() const { return evictionCount_; }
 
     uint32_t textureArrayLayerCount() const;
     uint32_t atlasRectCount() const;
@@ -139,6 +164,11 @@ private:
     void createUploadTimelineSemaphore();
     void createTextureStreamer();
     void createResidencyDescriptorSet();
+    // Frees the oldest unused entry in demoTextures_ (never the hero's
+    // current TextureRef when it's Bindless-kind) once demoResidentBytes()
+    // exceeds kDemoResidentCapBytes. Called once per frame from
+    // recordWorldPass, before satellites reference demoTextures_ by index.
+    void maybeEvictDemoTexture();
     void createTimestampPool();
     void createDepthTarget();
     void destroyDepthTarget();
@@ -245,6 +275,14 @@ private:
     // pipeline layout and bind at draw time.
     std::unique_ptr<TextureStreamer> textureStreamer_;
     std::vector<TextureHandle> demoTextures_; // slots 1..N: checker, stripes, gradient, spare
+    // Parallel to demoTextures_: byte size (for demoResidentBytes()) and
+    // the frame each entry was last the hero's active Bindless texture
+    // (for maybeEvictDemoTexture's oldest-first pick). Kept in lockstep
+    // by every function that grows, shrinks, or replaces demoTextures_.
+    std::vector<VkDeviceSize> demoTextureBytes_;
+    std::vector<uint64_t> demoTextureLastUsedFrame_;
+    uint64_t frameCounter_ = 0;
+    uint32_t evictionCount_ = 0;
     int activeDemoTextureIndex_ = 0;
     uint32_t regenerateCounter_ = 0;
 
@@ -295,9 +333,9 @@ private:
     // wiki's Rendering page.
     glm::vec3 cameraHomeDirection_{0.0f, 0.0f, 1.0f};
     float cameraDistance_ = 1.0f;
+    // Set externally by setSimTime(), not accumulated here - see that
+    // setter's comment.
     float elapsedTimeSeconds_ = 0.0f;
-    uint64_t lastTicks_ = 0;
-    bool clockStarted_ = false;
 };
 
 } // namespace renderer

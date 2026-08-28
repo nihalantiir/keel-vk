@@ -51,6 +51,14 @@ public:
                                             : queueFamilyIndices_.graphicsFamily.value();
     }
 
+    // Whether VK_EXT_memory_budget was found and enabled (see the device
+    // contract's "enabled if present, never required" list). When true,
+    // VmaBudget::budget/usage (queried via vmaGetHeapBudgets, since
+    // VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT is set alongside this)
+    // reflect the driver's actual reported numbers instead of VMA's own
+    // heap-size estimate.
+    bool memoryBudgetSupported() const { return memoryBudgetSupported_; }
+
 private:
     void createInstance(Window& window);
     void setupDebugMessenger();

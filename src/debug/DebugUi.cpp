@@ -151,6 +151,18 @@ void DebugUi::drawOverlay() {
 
     ImGui::Text("Bindless textures: %u / %u slots used", renderer_.boundTextureCount(),
                 renderer::Renderer::kMaxBindlessTextures);
+    if (renderer_.memoryBudgetSupported()) {
+        ImGui::Text("VRAM: %.1f / %.1f MB (VK_EXT_memory_budget)",
+                    static_cast<double>(renderer_.deviceMemoryUsageBytes()) / (1024.0 * 1024.0),
+                    static_cast<double>(renderer_.deviceMemoryBudgetBytes()) / (1024.0 * 1024.0));
+    } else {
+        ImGui::Text("VRAM: %.1f / %.1f MB (estimated, VK_EXT_memory_budget not present)",
+                    static_cast<double>(renderer_.deviceMemoryUsageBytes()) / (1024.0 * 1024.0),
+                    static_cast<double>(renderer_.deviceMemoryBudgetBytes()) / (1024.0 * 1024.0));
+    }
+    ImGui::Text("Demo textures resident: %llu / %llu bytes, %u evicted",
+                static_cast<unsigned long long>(renderer_.demoResidentBytes()),
+                static_cast<unsigned long long>(renderer_.demoResidentCapBytes()), renderer_.evictionCount());
     ImGui::SliderInt("Cube texture slot", &renderer_.activeDemoTextureIndex(), 0, renderer_.demoTextureCount() - 1,
                       "demo slot %d");
     if (ImGui::Button("Regenerate active (streamed update)")) {

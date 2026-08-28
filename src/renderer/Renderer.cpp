@@ -121,6 +121,33 @@ constexpr float kSatelliteRingRadius = 1.8f;
 constexpr float kSatelliteOrbitDegPerSec = 8.0f;
 constexpr float kSatelliteScale = 0.35f;
 
+struct DeviceMemoryBudget {
+    VkDeviceSize budgetBytes = 0;
+    VkDeviceSize usageBytes = 0;
+};
+
+// Sums every DEVICE_LOCAL heap's VmaBudget. VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT
+// (set in VulkanContext when VK_EXT_memory_budget is present) makes
+// budget/usage reflect the driver's own numbers instead of VMA's
+// heap-size estimate; either way this is real device memory state, not
+// the small artificial cap maybeEvictDemoTexture actually triggers on.
+DeviceMemoryBudget queryDeviceLocalBudget(keel::VulkanContext& context) {
+    VkPhysicalDeviceMemoryProperties memProps;
+    vkGetPhysicalDeviceMemoryProperties(context.physicalDevice(), &memProps);
+
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(context.allocator(), budgets.data());
+
+    DeviceMemoryBudget result{};
+    for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i) {
+        if (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+            result.budgetBytes += budgets[i].budget;
+            result.usageBytes += budgets[i].usage;
+        }
+    }
+    return result;
+}
+
 // 8x8 checkerboard, loaded from the base content pack as raw RGBA8 bytes:
 // no image-loading dependency (see the wiki's Libraries page - stb_image
 // is deliberately not in this landing), just a format known ahead of time.
@@ -541,19 +568,30 @@ void Renderer::createTextureStreamer() {
 
     // Demo content so the overlay's texture-slot control has more than one
     // real texture to cycle between. Slot 0 (the streamer's own resident
-    // default) is deliberately not in this list.
+    // default) is deliberately not in this list. demoTextureBytes_ and
+    // demoTextureLastUsedFrame_ stay parallel to demoTextures_ - see
+    // maybeEvictDemoTexture().
     const std::array<uint8_t, kCheckerSize * kCheckerSize * 4> checkerPixels = loadCheckerPixels(vfs_);
     demoTextures_.push_back(
         textureStreamer_->allocate(kCheckerSize, kCheckerSize, checkerPixels.data(), "checker (packages/base)"));
+    demoTextureBytes_.push_back(static_cast<VkDeviceSize>(kCheckerSize) * kCheckerSize * 4);
 
     const std::vector<uint8_t> stripes = makeStripePattern(16, 16);
     demoTextures_.push_back(textureStreamer_->allocate(16, 16, stripes.data(), "stripes (generated)"));
+    demoTextureBytes_.push_back(16 * 16 * 4);
 
     const std::vector<uint8_t> gradient = makeGradientPattern(16, 16);
     demoTextures_.push_back(textureStreamer_->allocate(16, 16, gradient.data(), "gradient (generated)"));
+    demoTextureBytes_.push_back(16 * 16 * 4);
 
     const std::vector<uint8_t> spare = makeSolidPattern(8, 8, 200, 200, 200);
     demoTextures_.push_back(textureStreamer_->allocate(8, 8, spare.data(), "spare (generated)"));
+    demoTextureBytes_.push_back(8 * 8 * 4);
+
+    demoTextureLastUsedFrame_.assign(demoTextures_.size(), 0);
+    for (size_t i = 0; i < demoTextureLastUsedFrame_.size(); ++i) {
+        demoTextureLastUsedFrame_[i] = i; // deterministic creation order, ties break by insertion
+    }
 
     // One-time startup flush: everything queued above needs to be resident
     // before the first frame draws, and there is no earlier frame's command
@@ -670,9 +708,16 @@ void Renderer::regenerateActiveTexture() {
                           static_cast<uint8_t>(color.b * 255.0f));
     textureStreamer_->update(demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)], 16, 16, pixels.data(),
                               "regenerated (streamed)");
+    demoTextureBytes_[static_cast<size_t>(activeDemoTextureIndex_)] = 16 * 16 * 4;
+    demoTextureLastUsedFrame_[static_cast<size_t>(activeDemoTextureIndex_)] = frameCounter_;
 }
 
 void Renderer::freeAndReallocateSpareTexture() {
+    // Index into demoTextures_ by position, same as the "regenerate" and
+    // "residency picker" controls - eviction (maybeEvictDemoTexture) can
+    // shift what's actually at this position, same as it can for any
+    // other index-based demo control. Debug-overlay convenience button,
+    // not a stable slot identity.
     constexpr size_t kSpareIndex = 3; // see createTextureStreamer: checker, stripes, gradient, spare
     if (demoTextures_.size() <= kSpareIndex) {
         return;
@@ -684,6 +729,70 @@ void Renderer::freeAndReallocateSpareTexture() {
         makeSolidPattern(8, 8, static_cast<uint8_t>(color.r * 255.0f), static_cast<uint8_t>(color.g * 255.0f),
                           static_cast<uint8_t>(color.b * 255.0f));
     demoTextures_[kSpareIndex] = textureStreamer_->allocate(8, 8, pixels.data(), "spare (reallocated)");
+    demoTextureBytes_[kSpareIndex] = 8 * 8 * 4;
+    demoTextureLastUsedFrame_[kSpareIndex] = frameCounter_;
+}
+
+bool Renderer::memoryBudgetSupported() const {
+    return context_.memoryBudgetSupported();
+}
+
+uint64_t Renderer::deviceMemoryBudgetBytes() const {
+    return queryDeviceLocalBudget(context_).budgetBytes;
+}
+
+uint64_t Renderer::deviceMemoryUsageBytes() const {
+    return queryDeviceLocalBudget(context_).usageBytes;
+}
+
+VkDeviceSize Renderer::demoResidentBytes() const {
+    VkDeviceSize total = 0;
+    for (VkDeviceSize bytes : demoTextureBytes_) {
+        total += bytes;
+    }
+    return total;
+}
+
+void Renderer::maybeEvictDemoTexture() {
+    if (demoResidentBytes() <= kDemoResidentCapBytes || demoTextures_.empty()) {
+        return;
+    }
+
+    // The hero's current Bindless texture is the only protected entry
+    // (slot 0, the streamer's own white default, is never in
+    // demoTextures_ at all - see createTextureStreamer). Everything else
+    // is eviction-eligible, including whatever a satellite currently
+    // samples: satellites re-derive their index from demoTextures_.size()
+    // every frame, so losing one just reshuffles what they show, no
+    // dangling handle.
+    const bool heroProtects = demoResidencyKind_ == TextureKind::Bindless && activeDemoTextureIndex_ >= 0 &&
+                               static_cast<size_t>(activeDemoTextureIndex_) < demoTextures_.size();
+    const size_t protectedIndex = heroProtects ? static_cast<size_t>(activeDemoTextureIndex_) : demoTextures_.size();
+
+    size_t oldestIndex = demoTextures_.size();
+    uint64_t oldestFrame = UINT64_MAX;
+    for (size_t i = 0; i < demoTextures_.size(); ++i) {
+        if (i == protectedIndex) {
+            continue;
+        }
+        if (demoTextureLastUsedFrame_[i] < oldestFrame) {
+            oldestFrame = demoTextureLastUsedFrame_[i];
+            oldestIndex = i;
+        }
+    }
+    if (oldestIndex == demoTextures_.size()) {
+        return; // nothing eligible (only the protected entry remains)
+    }
+
+    textureStreamer_->free(demoTextures_[oldestIndex]);
+    demoTextures_.erase(demoTextures_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
+    demoTextureBytes_.erase(demoTextureBytes_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
+    demoTextureLastUsedFrame_.erase(demoTextureLastUsedFrame_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
+    ++evictionCount_;
+
+    if (activeDemoTextureIndex_ >= static_cast<int>(demoTextures_.size())) {
+        activeDemoTextureIndex_ = demoTextures_.empty() ? 0 : static_cast<int>(demoTextures_.size()) - 1;
+    }
 }
 
 uint32_t Renderer::textureArrayLayerCount() const {
@@ -1119,6 +1228,17 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     instances[0].visible = 1;
     instances[0].generation = 0;
 
+    // Bindless demo-texture eviction: marks the hero's current Bindless
+    // texture as freshly used, then frees the oldest unused entry if
+    // total demo resident bytes are over the cap. Runs before satellites
+    // reference demoTextures_ below, so they see the post-eviction state
+    // this same frame, not a stale index.
+    ++frameCounter_;
+    if (demoResidencyKind_ == TextureKind::Bindless && hasActiveDemoTexture) {
+        demoTextureLastUsedFrame_[static_cast<size_t>(activeDemoTextureIndex_)] = frameCounter_;
+    }
+    maybeEvictDemoTexture();
+
     // Satellites: a small static ring around the hero, not gameplay,
     // just enough population for the frustum cull below to reject
     // something real instead of always seeing exactly one instance. Same
@@ -1236,18 +1356,6 @@ void Renderer::recordOverlayPass(VkCommandBuffer cmd, debug::DebugUi* debugUi) {
 }
 
 void Renderer::drawFrame(debug::DebugUi* debugUi) {
-    const uint64_t now = SDL_GetPerformanceCounter();
-    if (!clockStarted_) {
-        lastTicks_ = now;
-        clockStarted_ = true;
-    }
-    const float dt =
-        static_cast<float>(now - lastTicks_) / static_cast<float>(SDL_GetPerformanceFrequency());
-    lastTicks_ = now;
-    if (!paused_) {
-        elapsedTimeSeconds_ += dt;
-    }
-
     const VkDevice device = context_.device();
 
     vkWaitForFences(device, 1, &inFlightFences_[currentFrame_], VK_TRUE, UINT64_MAX);

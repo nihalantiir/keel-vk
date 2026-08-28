@@ -93,6 +93,13 @@ int main(int argc, char** argv) {
         // alpha()). Starts equal so the first frame's lerp is a no-op.
         keel::Transform previousTransform = world.getComponent<keel::Transform>(cube);
 
+        // The renderer's one sim-time clock (hue phase, satellite orbiting):
+        // accumulated here, gated on the same pause flag as fixedClock
+        // below, and pushed to Renderer via setSimTime() each frame -
+        // not a second SDL timer of Renderer's own. See the wiki's
+        // Rendering page for why this used to be two clocks.
+        float simTimeSeconds = 0.0f;
+
         float heartbeatTimer = 0.0f;
 
         Uint64 lastTicks = SDL_GetPerformanceCounter();
@@ -134,7 +141,9 @@ int main(int argc, char** argv) {
             // way (drawFrame() runs unconditionally further down).
             if (!renderer.paused()) {
                 fixedClock.advance(deltaTime);
+                simTimeSeconds += deltaTime;
             }
+            renderer.setSimTime(simTimeSeconds);
             while (fixedClock.consumeStep()) {
                 keel::Transform& transform = world.getComponent<keel::Transform>(cube);
                 previousTransform = transform;
