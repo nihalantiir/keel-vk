@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now consumes that entity's model matrix instead of computing rotation
   internally, so the World's Transform is the real source of truth for
   what the indirect draw renders.
+- `src/net/Host` (`net::Host`), a transport-only ENet wrap (`lsalzman/enet`,
+  pinned `v1.3.18`, vendored via FetchContent, built as a small static
+  library). `src/net/Protocol.h` defines a one-byte version plus a
+  `MessageType` header; `Heartbeat` is the only message type. `keel-vk-server`
+  always listens on UDP 7777; `keel-vk` (the client) links ENet but stays
+  entirely idle (no host constructed, no ENet init) unless launched with
+  `--connect` or `--connect=host[:port]`. Windows-only fix: ENet's own
+  CMakeLists doesn't link `ws2_32`/`winmm`, so the `enet` target does that
+  itself for every consumer.
+- Fixed a real bug caught while testing the above: `Host::service()`'s
+  event-drain loop never re-polled `enet_host_service`, so it would only
+  ever see the first event per call (or hang draining a stale one).
 
 ## [0.1.0] - 2026-08-28
 

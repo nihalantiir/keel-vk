@@ -1,6 +1,7 @@
 #include "../keel-vk/Swapchain.h"
 #include "../keel-vk/VulkanContext.h"
 #include "../keel-vk/Window.h"
+#include "../net/Host.h"
 #include "../renderer/Renderer.h"
 #include "../shared/Clock.h"
 #include "../shared/Components.h"
@@ -16,9 +17,59 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <memory>
+#include <string>
 
-int main() {
+namespace {
+
+// "--connect" alone means 127.0.0.1:7777; "--connect=host" or
+// "--connect=host:port" override either part.
+bool parseConnectFlag(int argc, char** argv, std::string& address, uint16_t& port) {
+    address = "127.0.0.1";
+    port = 7777;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg.rfind("--connect", 0) != 0) {
+            continue;
+        }
+        const size_t eq = arg.find('=');
+        if (eq != std::string::npos) {
+            const std::string value = arg.substr(eq + 1);
+            const size_t colon = value.find(':');
+            if (colon != std::string::npos) {
+                address = value.substr(0, colon);
+                port = static_cast<uint16_t>(std::stoi(value.substr(colon + 1)));
+            } else {
+                address = value;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
     try {
+        std::string connectAddress;
+        uint16_t connectPort = 0;
+        const bool wantsNet = parseConnectFlag(argc, argv, connectAddress, connectPort);
+
+        // Stays entirely unconstructed (no ENet init, no host) unless
+        // --connect was passed: the client is idle over the network by
+        // default.
+        std::unique_ptr<net::Host> netHost;
+        if (wantsNet) {
+            if (!net::Host::initialize()) {
+                throw std::runtime_error("Failed to initialize ENet");
+            }
+            netHost = std::make_unique<net::Host>(0);
+            netHost->connect(connectAddress, connectPort);
+            std::cout << "keel-vk: connecting to " << connectAddress << ":" << connectPort << std::endl;
+        }
+
         keel::Window window("keel-vk: working (v0.1.0)", 1280, 720);
         keel::VulkanContext context(window);
         keel::Swapchain swapchain(context, window);
@@ -34,6 +85,8 @@ int main() {
         world.addComponent<keel::Transform>(cube);
         world.addComponent<keel::Name>(cube, "Cube");
         world.addComponent<keel::Visible>(cube);
+
+        float heartbeatTimer = 0.0f;
 
         Uint64 lastTicks = SDL_GetPerformanceCounter();
         const Uint64 frequency = SDL_GetPerformanceFrequency();
@@ -75,6 +128,15 @@ int main() {
                 // in a debugger or otherwise stalls for a long frame.
             }
 
+            if (netHost) {
+                netHost->service(0); // non-blocking: never stall the render loop
+                heartbeatTimer += deltaTime;
+                if (heartbeatTimer >= 1.0f) {
+                    netHost->sendHeartbeat();
+                    heartbeatTimer = 0.0f;
+                }
+            }
+
             // The cube's Transform is the single source of truth for its
             // model matrix: Renderer only consumes whatever setModel() is
             // given, it doesn't compute rotation itself.
@@ -92,6 +154,10 @@ int main() {
             renderer.drawFrame();
 #endif
             window.updateTitle(deltaTime);
+        }
+
+        if (wantsNet) {
+            net::Host::shutdown();
         }
     } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << std::endl;

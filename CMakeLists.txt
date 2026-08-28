@@ -103,6 +103,24 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(entt) # provides the EnTT::EnTT target itself
 
+# --- ENet (vendored via FetchContent into external/, pinned tag) ---
+# Always fetched, transport only (src/net/Host.h): keel-vk-server always
+# links it, and the client links it too but stays idle unless --connect
+# is passed (see src/client/main.cpp).
+FetchContent_Declare(
+  enet
+  GIT_REPOSITORY https://github.com/lsalzman/enet.git
+  GIT_TAG v1.3.18
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(enet) # provides the "enet" target itself
+target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
+if(WIN32)
+  # ENet's own CMakeLists doesn't link these; without them every consumer
+  # fails at link time with unresolved Winsock/timer symbols.
+  target_link_libraries(enet PUBLIC ws2_32 winmm)
+endif()
+
 # --- Dear ImGui (vendored via FetchContent into external/, pinned commit) ---
 # Gated behind KEEL_VK_IMGUI: OFF skips the fetch entirely, so configure
 # needs no network access and src/debug/ isn't compiled.
@@ -144,6 +162,7 @@ set(KEEL_VK_CLIENT_SOURCES
   src/keel-vk/ShaderModule.cpp
   src/keel-vk/VmaImpl.cpp
   src/renderer/Renderer.cpp
+  src/net/Host.cpp
 )
 if(KEEL_VK_IMGUI)
   list(APPEND KEEL_VK_CLIENT_SOURCES src/debug/DebugUi.cpp)
@@ -174,6 +193,7 @@ target_link_libraries(keel-vk PRIVATE
   SDL3::SDL3
   glm::glm
   EnTT::EnTT
+  enet
 )
 if(KEEL_VK_IMGUI)
   target_link_libraries(keel-vk PRIVATE imgui)
@@ -183,8 +203,10 @@ set_target_properties(keel-vk PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-# --- keel-vk-server: headless stub, no Vulkan/SDL, reserved for keel-net ---
-add_executable(keel-vk-server src/server/main.cpp)
+# --- keel-vk-server: headless, no Vulkan/SDL, only the ENet transport ---
+add_executable(keel-vk-server src/server/main.cpp src/net/Host.cpp)
+target_include_directories(keel-vk-server PRIVATE src)
+target_link_libraries(keel-vk-server PRIVATE enet)
 set_target_properties(keel-vk-server PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
