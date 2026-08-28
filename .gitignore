@@ -1,0 +1,21 @@
+build/
+out/
+.cache/
+compile_commands.json
+
+*.user
+.vs/
+.vscode/
+.idea/
+CMakeUserPresets.json
+
+*.spv
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# FetchContent checkout, not vendored in-repo
+external/*
+!external/README.md

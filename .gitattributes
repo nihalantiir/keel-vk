@@ -1,0 +1,31 @@
+# Normalize line endings for everything by default; Git stores LF and
+# checks out the platform-native ending unless overridden below.
+* text=auto eol=lf
+
+# Windows-only scripts need CRLF to behave with cmd/PowerShell tooling.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# POSIX shell scripts must stay LF regardless of platform.
+*.sh text eol=lf
+
+# Source and build files: enforce LF, exclude from GitHub language stats
+# where they'd just add noise.
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+CMakeLists.txt text eol=lf
+*.cmake text eol=lf
+
+# Common binary/asset types: never diff, never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.spv binary
+*.ttf binary
+*.otf binary
+*.wav binary
+*.ogg binary
