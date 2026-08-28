@@ -81,9 +81,9 @@ constexpr std::array<uint32_t, 36> kIndices = {{
     20, 21, 22, 20, 22, 23, // -Y
 }};
 
-// Per-object data (model matrix, texture index) moved to the instance
-// SSBO in slice 2; only camera- and time-derived values that are the
-// same for every instance in this draw stay as push constants.
+// Per-object data (model matrix, texture index) lives in the instance
+// SSBO; only camera- and time-derived values that are the same for
+// every instance in this draw stay as push constants.
 struct PushConstants {
     glm::mat4 viewProj;
     float time;
@@ -995,9 +995,9 @@ void Renderer::createPipeline() {
     colorBlend.pAttachments = &colorBlendAttachment;
 
     // viewProj/time/phaseSpeed are read in the vertex shader only: per-
-    // instance data (model, texture index) moved to the instance SSBO in
-    // slice 2, so the fragment shader no longer touches push constants at
-    // all (it reads the texture index cube.vert forwards as a varying).
+    // instance data (model, texture index) lives in the instance SSBO,
+    // so the fragment shader doesn't touch push constants at all (it
+    // reads the texture index cube.vert forwards as a varying).
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstantRange.offset = 0;
@@ -1198,10 +1198,10 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
                                      ? demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)].slot
                                      : 0; // falls back to the streamer's resident default
 
-    // Write this frame's instances. Just the cube today (slot 0), but the
-    // buffer, the cull loop, and the compaction below are all sized and
-    // written as if there could be many - see the wiki's Rendering page
-    // for why that scaffolding exists before anything needs it.
+    // Write this frame's instances: the hero cube at slot 0, satellites
+    // filling the rest (below). The buffer, cull loop, and compaction are
+    // sized for a larger population than this - see the wiki's Rendering
+    // page for why that scaffolding exists.
     InstanceFrame& frame = instanceFrames_[static_cast<size_t>(currentFrame_)];
     auto* instances = static_cast<GpuInstance*>(frame.instanceMapped);
     instances[0].model = originAdjustedModel;
