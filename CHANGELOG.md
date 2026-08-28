@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-28
+
+The GPU scene stops being true only for one instance. The stock cube
+gains a small orbiting satellite ring so the frustum cull actually
+rejects something; the mesh pool moves off host-visible memory onto real
+`DEVICE_LOCAL` buffers; bindless texture residency gains a real (if
+artificially capped, for demo purposes) eviction path against the
+device's actual `VK_EXT_memory_budget` numbers; and hue phase stops
+running on a second clock of its own. No genre content, no gameplay -
+still one window, still the hue cube as the hero object.
+
+### Added
+
+- **Satellite ring**: 12 small cubes (`kSatelliteCount` in `Renderer.cpp`)
+  orbit the hero in a static ring, cycling through all three
+  `TextureKind`s (bindless, array, atlas) round-robin so all three
+  residency paths are sampled in one frame regardless of the hero's own
+  Residency picker. Not gameplay - population for the CPU frustum cull to
+  reject something real instead of always seeing exactly one instance.
+- **Camera dolly**: a debug-overlay "Camera distance" slider scales the
+  camera along its fixed home direction (never becomes free-fly input).
+  Dollying in shrinks how many world units the fixed FOV covers, visibly
+  culling satellites - verified against the overlay's own instance/draw
+  counts (13 written/13 drawn at rest, 13 written/6 drawn at dolly 1.2),
+  not asserted in a comment.
+- **Demo-texture eviction**: `Renderer::maybeEvictDemoTexture` frees the
+  oldest-touched bindless demo texture once resident bytes exceed a
+  small, deliberately artificial cap (2048 bytes - real device VRAM
+  budgets are gigabytes, so gating on the real number would never fire in
+  this contract test). The hero's current Bindless `TextureRef` is the
+  only protected entry; the streamer's own white default (slot 0) was
+  never eviction-eligible to begin with. The debug overlay shows both the
+  real `VK_EXT_memory_budget` numbers (informational) and the demo cap's
+  resident bytes/eviction count (what actually gates eviction).
+- **Cull timing**: the debug overlay's "Cull: CPU (N ms)" line times the
+  frustum-cull-and-compact loop with `SDL_GetPerformanceCounter`, around
+  that loop only.
+
+### Changed
+
+- **Mesh pool is `DEVICE_LOCAL`**: `MeshPool`'s vertex/index buffers moved
+  off host-visible mapped memory onto real device-local buffers, written
+  through a per-call staging buffer and `vkCmdCopyBuffer`. `allocate()`
+  never blocks the CPU: it signals the same shared upload timeline
+  semaphore the texture uploads already use (now four values instead of
+  three, the mesh pool's cube-mesh upload going first) instead of calling
+  `vkQueueWaitIdle`. API shape (`allocate()` -> `MeshRange`, still no
+  `free()`) is unchanged.
+- **One sim-time clock, not two**: `Renderer` no longer runs its own
+  `SDL_GetPerformanceCounter` clock for hue phase. `main()` owns one
+  `simTimeSeconds` accumulator, gated by the same pause check that gates
+  `shared::FixedClock`, pushed into `Renderer::setSimTime()` once per
+  frame. Hue phase, satellite orbiting, and the cube's rotation now pause
+  together because they read one clock, not because two independent
+  clocks happened to agree.
+- `recordComputePass` stays a documented no-op rather than a
+  compute-shader compact: reading a GPU-written draw count back for
+  `vkCmdDrawIndexedIndirect` without a CPU stall needs
+  `vkCmdDrawIndexedIndirectCount`, which isn't in the device contract at
+  any tier. Adding it now would be a device-capability migration for a
+  compact loop the CPU already does in about 0.03ms at 13 instances.
+
+### Fixed
+
+- README's project tree was missing `src/frame/` (added in 0.3.0, never
+  listed). Wiki Rendering still described the pre-0.3.0 push-constant
+  texture-index scheme in one section after the rest of the page had
+  already moved on.
+
 ## [0.3.0] - 2026-08-28
 
 Corrects how this repo positions itself: Keel is a template for a custom
