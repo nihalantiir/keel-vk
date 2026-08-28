@@ -8,6 +8,7 @@
 #include "../shared/Vfs.h"
 #include "../shared/World.h"
 #include "ActionMap.h"
+#include "Config.h"
 
 #if KEEL_VK_IMGUI
 #include "../debug/DebugUi.h"
@@ -19,62 +20,29 @@
 #include <exception>
 #include <iostream>
 #include <memory>
-#include <string>
-
-namespace {
-
-// "--connect" alone means 127.0.0.1:7777; "--connect=host" or
-// "--connect=host:port" override either part.
-bool parseConnectFlag(int argc, char** argv, std::string& address, uint16_t& port) {
-    address = "127.0.0.1";
-    port = 7777;
-
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg.rfind("--connect", 0) != 0) {
-            continue;
-        }
-        const size_t eq = arg.find('=');
-        if (eq != std::string::npos) {
-            const std::string value = arg.substr(eq + 1);
-            const size_t colon = value.find(':');
-            if (colon != std::string::npos) {
-                address = value.substr(0, colon);
-                port = static_cast<uint16_t>(std::stoi(value.substr(colon + 1)));
-            } else {
-                address = value;
-            }
-        }
-        return true;
-    }
-    return false;
-}
-
-} // namespace
 
 int main(int argc, char** argv) {
     try {
-        std::string connectAddress;
-        uint16_t connectPort = 0;
-        const bool wantsNet = parseConnectFlag(argc, argv, connectAddress, connectPort);
+        const client::Config config = client::Config::load(argc, argv);
 
         // Stays entirely unconstructed (no ENet init, no host) unless
-        // --connect was passed: the client is idle over the network by
-        // default.
+        // --connect (or connect_address in keel.toml/json) was set: the
+        // client is idle over the network by default.
         std::unique_ptr<net::Host> netHost;
-        if (wantsNet) {
+        if (config.wantsNet) {
             if (!net::Host::initialize()) {
                 throw std::runtime_error("Failed to initialize ENet");
             }
             netHost = std::make_unique<net::Host>(0);
-            netHost->connect(connectAddress, connectPort);
-            std::cout << "keel-vk: connecting to " << connectAddress << ":" << connectPort << std::endl;
+            netHost->connect(config.connectAddress, config.connectPort);
+            std::cout << "keel-vk: connecting to " << config.connectAddress << ":" << config.connectPort
+                       << std::endl;
         }
 
-        keel::Window window("keel-vk: working (v0.5.0)", 1280, 720);
-        keel::Vfs vfs; // mounts packages/ next to the executable
+        keel::Window window("keel-vk: working (v0.6.0)", config.windowWidth, config.windowHeight);
+        keel::Vfs vfs(config.packageRootOverride); // mounts packages/ next to the executable, or the override
         keel::VulkanContext context(window);
-        keel::Swapchain swapchain(context, window);
+        keel::Swapchain swapchain(context, window, client::toVkPresentMode(config.presentModePreference));
         renderer::Renderer renderer(context, swapchain, window, vfs);
 #if KEEL_VK_IMGUI
         debug::DebugUi debugUi(context, swapchain, window, renderer);
@@ -181,7 +149,7 @@ int main(int argc, char** argv) {
             window.updateTitle(deltaTime);
         }
 
-        if (wantsNet) {
+        if (config.wantsNet) {
             net::Host::shutdown();
         }
     } catch (const std::exception& e) {

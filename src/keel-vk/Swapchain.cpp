@@ -11,7 +11,8 @@
 
 namespace keel {
 
-Swapchain::Swapchain(VulkanContext& context, Window& window) : context_(context), window_(window) {
+Swapchain::Swapchain(VulkanContext& context, Window& window, VkPresentModeKHR preferredPresentMode)
+    : context_(context), window_(window), preferredPresentMode_(preferredPresentMode) {
     create();
 }
 
@@ -35,6 +36,11 @@ VkSurfaceFormatKHR Swapchain::chooseSurfaceFormat(const std::vector<VkSurfaceFor
 }
 
 VkPresentModeKHR Swapchain::choosePresentMode(const std::vector<VkPresentModeKHR>& available) const {
+    for (const auto& mode : available) {
+        if (mode == preferredPresentMode_) {
+            return mode;
+        }
+    }
     for (const auto& mode : available) {
         if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
             return mode;

@@ -161,6 +161,7 @@ endif()
 set(KEEL_VK_CLIENT_SOURCES
   src/client/main.cpp
   src/client/ActionMap.cpp
+  src/client/Config.cpp
   src/keel-vk/Window.cpp
   src/keel-vk/VulkanContext.cpp
   src/keel-vk/Swapchain.cpp

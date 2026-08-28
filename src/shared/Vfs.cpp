@@ -37,15 +37,20 @@ std::string extractJsonString(const std::string& content, const std::string& key
 
 } // namespace
 
-Vfs::Vfs() {
-    const char* basePathCStr = SDL_GetBasePath();
-    if (!basePathCStr) {
-        throw std::runtime_error("Failed to resolve SDL base path for package discovery");
+Vfs::Vfs(const std::string& packagesRoot) {
+    fs::path packagesDir;
+    if (!packagesRoot.empty()) {
+        packagesDir = fs::path(packagesRoot);
+    } else {
+        const char* basePathCStr = SDL_GetBasePath();
+        if (!basePathCStr) {
+            throw std::runtime_error("Failed to resolve SDL base path for package discovery");
+        }
+        packagesDir = fs::path(basePathCStr) / "packages";
     }
 
-    const fs::path packagesDir = fs::path(basePathCStr) / "packages";
     if (!fs::exists(packagesDir)) {
-        return; // no packages/ next to the executable: nothing to mount
+        throw std::runtime_error("packages/ not found at: " + fs::absolute(packagesDir).string());
     }
 
     for (const auto& entry : fs::directory_iterator(packagesDir)) {

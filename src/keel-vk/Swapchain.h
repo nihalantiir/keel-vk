@@ -11,7 +11,12 @@ class Window;
 
 class Swapchain {
 public:
-    Swapchain(VulkanContext& context, Window& window);
+    // preferredPresentMode is used if the surface actually supports it;
+    // otherwise falls back to MAILBOX, then FIFO (always supported) - see
+    // choosePresentMode(). Defaults to MAILBOX to preserve the original
+    // simple-vk behavior for callers that don't care.
+    Swapchain(VulkanContext& context, Window& window,
+              VkPresentModeKHR preferredPresentMode = VK_PRESENT_MODE_MAILBOX_KHR);
     ~Swapchain();
 
     Swapchain(const Swapchain&) = delete;
@@ -36,6 +41,7 @@ private:
 
     VulkanContext& context_;
     Window& window_;
+    VkPresentModeKHR preferredPresentMode_;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat imageFormat_ = VK_FORMAT_UNDEFINED;
     VkExtent2D extent_{};
