@@ -7,6 +7,7 @@
 #include "../keel-vk/VulkanContext.h"
 #include "../keel-vk/Window.h"
 #include "../shared/Vfs.h"
+#include "Frustum.h"
 #include "TextureArray2D.h"
 
 #if KEEL_VK_IMGUI
@@ -79,12 +80,33 @@ constexpr std::array<uint32_t, 36> kIndices = {{
     20, 21, 22, 20, 22, 23, // -Y
 }};
 
+// Per-object data (model matrix, texture index) moved to the instance
+// SSBO in slice 2; only camera- and time-derived values that are the
+// same for every instance in this draw stay as push constants.
 struct PushConstants {
-    glm::mat4 mvp;
+    glm::mat4 viewProj;
     float time;
     float phaseSpeed;
-    uint32_t textureIndex;
 };
+
+// mat4 (64) + vec4 (16) + 4 x uint32 (16) = 96 bytes, matching cube.vert's
+// std430 Instance struct field for field. scalarBlockLayout is part of
+// the required device contract, but this still keeps natural 16-byte
+// alignment throughout rather than relying on it.
+struct GpuInstance {
+    glm::mat4 model;
+    glm::vec4 boundsCenterRadius;
+    uint32_t textureIndex;
+    uint32_t visible;
+    uint32_t generation;
+    uint32_t _pad0;
+};
+
+// Local-space bounding sphere radius for the 1x1x1 cube (half-extent 0.5
+// on every axis): sqrt(3 * 0.5^2). Rotation doesn't change a sphere's
+// radius, so this stays constant regardless of the cube's current
+// orientation; only a non-uniform scale would invalidate it.
+constexpr float kCubeBoundsRadius = 0.8660254f;
 
 // 8x8 checkerboard, loaded from the base content pack as raw RGBA8 bytes:
 // no image-loading dependency (see the wiki's Libraries page - stb_image
@@ -179,7 +201,8 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
     createCommandBuffers();
     createSyncObjects();
     createTimestampPool();
-    createGeometryBuffers();
+    createMeshPool();
+    createInstanceResources();
     createTextureStreamer();
     textureArray_ = std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16);
     // "hello", 5 glyph-shaped placeholder rects: proves the shelf packer
@@ -222,15 +245,8 @@ Renderer::~Renderer() {
     textureArray_.reset();
     textureStreamer_.reset();
 
-    if (indirectBuffer_ != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(context_.allocator(), indirectBuffer_, indirectBufferAllocation_);
-    }
-    if (indexBuffer_ != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(context_.allocator(), indexBuffer_, indexBufferAllocation_);
-    }
-    if (vertexBuffer_ != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(context_.allocator(), vertexBuffer_, vertexBufferAllocation_);
-    }
+    destroyInstanceResources();
+    meshPool_.reset();
 
     destroySyncObjects();
     if (uploadCommandPool_ != VK_NULL_HANDLE) {
@@ -361,11 +377,12 @@ void Renderer::destroySyncObjects() {
 
 namespace {
 
-VkBuffer createDeviceLocalBufferWithData(keel::VulkanContext& context, const void* data, VkDeviceSize size,
-                                          VkBufferUsageFlags usage, VmaAllocation& outAllocation,
-                                          const char* debugName) {
-    // Host-visible mapped, written once: these buffers are small and static,
-    // so a staging upload would only add cost for no benefit here.
+// Host-visible mapped, persistently: every buffer this file creates below
+// is either written once (mesh pool) or rewritten every frame (instance /
+// indirect), never staged through a device-local copy, so there is no
+// benefit to VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE here.
+VkBuffer createMappedBuffer(keel::VulkanContext& context, VkDeviceSize size, VkBufferUsageFlags usage,
+                             VmaAllocation& outAllocation, void*& outMapped, const char* debugName) {
     VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bufferInfo.size = size;
     bufferInfo.usage = usage;
@@ -377,10 +394,10 @@ VkBuffer createDeviceLocalBufferWithData(keel::VulkanContext& context, const voi
 
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocationInfo allocationInfo{};
-    keel::vkCheck(vmaCreateBuffer(context.allocator(), &bufferInfo, &allocInfo, &buffer, &outAllocation,
-                                   &allocationInfo),
-                  "Failed to create buffer");
-    std::memcpy(allocationInfo.pMappedData, data, static_cast<size_t>(size));
+    keel::vkCheck(
+        vmaCreateBuffer(context.allocator(), &bufferInfo, &allocInfo, &buffer, &outAllocation, &allocationInfo),
+        "Failed to create buffer");
+    outMapped = allocationInfo.pMappedData;
 
     keel::setDebugObjectName(context.device(), VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(buffer), debugName);
     return buffer;
@@ -388,26 +405,87 @@ VkBuffer createDeviceLocalBufferWithData(keel::VulkanContext& context, const voi
 
 } // namespace
 
-void Renderer::createGeometryBuffers() {
-    vertexBuffer_ = createDeviceLocalBufferWithData(context_, kVertices.data(), sizeof(kVertices),
-                                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertexBufferAllocation_,
-                                                      "cube vertex buffer");
-    indexBuffer_ = createDeviceLocalBufferWithData(context_, kIndices.data(), sizeof(kIndices),
-                                                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indexBufferAllocation_,
-                                                     "cube index buffer");
+void Renderer::createMeshPool() {
+    // Capacity is a scaffold, not a measurement: comfortably more than the
+    // one cube mesh this landing allocates, so MeshPool::allocate has real
+    // room to demonstrate subrange allocation instead of exactly fitting
+    // one caller.
+    meshPool_ = std::make_unique<MeshPool>(context_, 8192, 16384, sizeof(Vertex));
+    cubeMesh_ = meshPool_->allocate(kVertices.data(), static_cast<uint32_t>(kVertices.size()), kIndices.data(),
+                                     static_cast<uint32_t>(kIndices.size()));
+}
 
-    // One draw command today, but a real indirect buffer: the scaffold for
-    // batching many draws through vkCmdDrawIndexedIndirect later.
-    VkDrawIndexedIndirectCommand command{};
-    command.indexCount = static_cast<uint32_t>(kIndices.size());
-    command.instanceCount = 1;
-    command.firstIndex = 0;
-    command.vertexOffset = 0;
-    command.firstInstance = 0;
+void Renderer::createInstanceResources() {
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    indirectBuffer_ = createDeviceLocalBufferWithData(context_, &command, sizeof(command),
-                                                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, indirectBufferAllocation_,
-                                                        "cube indirect draw buffer");
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &binding;
+    keel::vkCheck(vkCreateDescriptorSetLayout(context_.device(), &layoutInfo, nullptr, &instanceSetLayout_),
+                  "Failed to create instance descriptor set layout");
+
+    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, static_cast<uint32_t>(kFramesInFlight)};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.maxSets = static_cast<uint32_t>(kFramesInFlight);
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    keel::vkCheck(vkCreateDescriptorPool(context_.device(), &poolInfo, nullptr, &instanceDescriptorPool_),
+                  "Failed to create instance descriptor pool");
+
+    for (int i = 0; i < kFramesInFlight; ++i) {
+        InstanceFrame& frame = instanceFrames_[static_cast<size_t>(i)];
+
+        const std::string instanceName = "instance buffer " + std::to_string(i);
+        frame.instanceBuffer =
+            createMappedBuffer(context_, sizeof(GpuInstance) * kMaxInstances, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                frame.instanceAllocation, frame.instanceMapped, instanceName.c_str());
+
+        const std::string indirectName = "indirect buffer " + std::to_string(i);
+        frame.indirectBuffer = createMappedBuffer(context_, sizeof(VkDrawIndexedIndirectCommand) * kMaxInstances,
+                                                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, frame.indirectAllocation,
+                                                    frame.indirectMapped, indirectName.c_str());
+
+        VkDescriptorSetAllocateInfo setAllocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        setAllocInfo.descriptorPool = instanceDescriptorPool_;
+        setAllocInfo.descriptorSetCount = 1;
+        setAllocInfo.pSetLayouts = &instanceSetLayout_;
+        keel::vkCheck(vkAllocateDescriptorSets(context_.device(), &setAllocInfo, &frame.instanceSet),
+                      "Failed to allocate instance descriptor set");
+
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = frame.instanceBuffer;
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(GpuInstance) * kMaxInstances;
+
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = frame.instanceSet;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &bufferInfo;
+        vkUpdateDescriptorSets(context_.device(), 1, &write, 0, nullptr);
+    }
+}
+
+void Renderer::destroyInstanceResources() {
+    for (InstanceFrame& frame : instanceFrames_) {
+        if (frame.indirectBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(context_.allocator(), frame.indirectBuffer, frame.indirectAllocation);
+        }
+        if (frame.instanceBuffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(context_.allocator(), frame.instanceBuffer, frame.instanceAllocation);
+        }
+    }
+    if (instanceDescriptorPool_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(context_.device(), instanceDescriptorPool_, nullptr);
+    }
+    if (instanceSetLayout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(context_.device(), instanceSetLayout_, nullptr);
+    }
 }
 
 void Renderer::createTextureStreamer() {
@@ -682,18 +760,23 @@ void Renderer::createPipeline() {
     colorBlend.attachmentCount = 1;
     colorBlend.pAttachments = &colorBlendAttachment;
 
-    // Covers both stages: mvp/time/phaseSpeed are read in the vertex shader,
-    // textureIndex in the fragment shader, all from the one push constant
-    // block declared identically in both.
+    // viewProj/time/phaseSpeed are read in the vertex shader only: per-
+    // instance data (model, texture index) moved to the instance SSBO in
+    // slice 2, so the fragment shader no longer touches push constants at
+    // all (it reads the texture index cube.vert forwards as a varying).
     VkPushConstantRange pushConstantRange{};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstantRange.offset = 0;
     pushConstantRange.size = sizeof(PushConstants);
 
+    // set 0: the bindless texture array (TextureStreamer). set 1: the
+    // per-instance SSBO, one descriptor set per frame in flight, bound at
+    // draw time in recordWorldPass.
     const VkDescriptorSetLayout bindlessSetLayout = textureStreamer_->descriptorSetLayout();
+    const VkDescriptorSetLayout setLayouts[] = {bindlessSetLayout, instanceSetLayout_};
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &bindlessSetLayout;
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(std::size(setLayouts));
+    layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstantRange;
     keel::vkCheck(vkCreatePipelineLayout(context_.device(), &layoutInfo, nullptr, &pipelineLayout_),
@@ -849,6 +932,15 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     const VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
+    const glm::mat4 viewProj = camera_.projection(aspect) * camera_.view();
+
+    PushConstants pushConstants{};
+    pushConstants.viewProj = viewProj;
+    pushConstants.time = elapsedTimeSeconds_;
+    pushConstants.phaseSpeed = phaseSpeedDegPerSec_;
+    vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants), &pushConstants);
+
     // model_ is set each frame in main() from a keel::World entity's
     // Transform (see src/shared/Components.h's toMatrix); Renderer only
     // consumes it here. Floating origin: model_'s translation is in world
@@ -856,7 +948,6 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     // already subtracts it from the eye point in Camera::view(), or the
     // object and the camera would drift apart as origin moves.
     const glm::mat4 originAdjustedModel = glm::translate(glm::mat4(1.0f), -camera_.origin) * model_;
-    const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
 
     const bool hasActiveDemoTexture =
         activeDemoTextureIndex_ >= 0 && activeDemoTextureIndex_ < static_cast<int>(demoTextures_.size());
@@ -864,21 +955,63 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
                                      ? demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)].slot
                                      : 0; // falls back to the streamer's resident default
 
-    PushConstants pushConstants{};
-    pushConstants.mvp = camera_.projection(aspect) * camera_.view() * originAdjustedModel;
-    pushConstants.time = elapsedTimeSeconds_;
-    pushConstants.phaseSpeed = phaseSpeedDegPerSec_;
-    pushConstants.textureIndex = activeSlot;
-    vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                        sizeof(pushConstants), &pushConstants);
+    // Write this frame's instances. Just the cube today (slot 0), but the
+    // buffer, the cull loop, and the compaction below are all sized and
+    // written as if there could be many - see the wiki's Rendering page
+    // for why that scaffolding exists before anything needs it.
+    InstanceFrame& frame = instanceFrames_[static_cast<size_t>(currentFrame_)];
+    auto* instances = static_cast<GpuInstance*>(frame.instanceMapped);
+    instances[0].model = originAdjustedModel;
+    instances[0].boundsCenterRadius = glm::vec4(glm::vec3(originAdjustedModel[3]), kCubeBoundsRadius);
+    instances[0].textureIndex = activeSlot;
+    instances[0].visible = 1;
+    instances[0].generation = 0;
+    const uint32_t writtenInstanceCount = 1;
 
-    const VkDescriptorSet bindlessSet = textureStreamer_->descriptorSet();
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &bindlessSet, 0, nullptr);
+    // CPU frustum cull against each instance's bounding sphere, compacting
+    // surviving draws to the front of the indirect buffer rather than
+    // zeroing culled entries in place: vkCmdDrawIndexedIndirect below is
+    // issued with exactly the surviving count, so a culled instance costs
+    // nothing on the GPU side, not even a zero-instanceCount draw. No
+    // Hi-Z, no occlusion query - bounds-only, CPU-side, same as any other
+    // frame-to-frame state here.
+    const Frustum frustum(viewProj);
+    auto* commands = static_cast<VkDrawIndexedIndirectCommand*>(frame.indirectMapped);
+    uint32_t triangleCount = 0;
+    uint32_t drawCount = 0;
+    for (uint32_t i = 0; i < writtenInstanceCount; ++i) {
+        if (!instances[i].visible) {
+            continue;
+        }
+        const glm::vec3 center(instances[i].boundsCenterRadius);
+        const float radius = instances[i].boundsCenterRadius.w;
+        if (!frustum.intersectsSphere(center, radius)) {
+            continue;
+        }
+        VkDrawIndexedIndirectCommand& command = commands[drawCount];
+        command.indexCount = cubeMesh_.indexCount;
+        command.instanceCount = 1;
+        command.firstIndex = cubeMesh_.indexOffset;
+        command.vertexOffset = static_cast<int32_t>(cubeMesh_.vertexOffset);
+        command.firstInstance = i; // slot index, read back by cube.vert via gl_InstanceIndex
+        ++drawCount;
+        triangleCount += cubeMesh_.indexCount / 3;
+    }
+    lastInstanceCount_ = writtenInstanceCount;
+    lastDrawCount_ = drawCount;
+    lastTriangleCount_ = triangleCount;
+
+    const VkDescriptorSet sets[] = {textureStreamer_->descriptorSet(), frame.instanceSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0,
+                             static_cast<uint32_t>(std::size(sets)), sets, 0, nullptr);
 
     const VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
-    vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexedIndirect(cmd, indirectBuffer_, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+    const VkBuffer vertexBuffer = meshPool_->vertexBuffer();
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, meshPool_->indexBuffer(), 0, VK_INDEX_TYPE_UINT32);
+    if (drawCount > 0) {
+        vkCmdDrawIndexedIndirect(cmd, frame.indirectBuffer, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
+    }
 }
 
 void Renderer::recordComputePass(VkCommandBuffer cmd) {

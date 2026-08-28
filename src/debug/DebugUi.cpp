@@ -132,6 +132,10 @@ void DebugUi::drawOverlay() {
                        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoDragDrop);
 
     ImGui::Separator();
+    ImGui::Text("Instances: %u written, %u drawn (%u triangles)", renderer_.instanceCount(), renderer_.drawCount(),
+                renderer_.triangleCount());
+
+    ImGui::Separator();
     ImGui::Text("Bindless textures: %u / %u slots used", renderer_.boundTextureCount(),
                 renderer::Renderer::kMaxBindlessTextures);
     ImGui::SliderInt("Cube texture slot", &renderer_.activeDemoTextureIndex(), 0, renderer_.demoTextureCount() - 1,

@@ -8,6 +8,7 @@
 
 #include "../frame/Camera.h"
 #include "Atlas2D.h"
+#include "MeshPool.h"
 #include "TextureStreamer.h"
 
 #include <array>
@@ -83,6 +84,15 @@ public:
     uint32_t textureArrayLayerCount() const;
     uint32_t atlasRectCount() const;
 
+    // GPU scene stats from the most recently recorded frame, for the
+    // debug overlay. instanceCount is how many instance slots were
+    // written this frame (just the cube today); drawCount is how many of
+    // those survived CPU frustum culling and were actually issued through
+    // vkCmdDrawIndexedIndirect.
+    uint32_t instanceCount() const { return lastInstanceCount_; }
+    uint32_t drawCount() const { return lastDrawCount_; }
+    uint32_t triangleCount() const { return lastTriangleCount_; }
+
     // GPU-side frame time from VK_QUERY_TYPE_TIMESTAMP, distinct from the
     // overlay's existing CPU-side ImGui::GetIO().Framerate reading. Absent
     // on a device without VkPhysicalDeviceLimits::timestampComputeAndGraphics
@@ -106,7 +116,9 @@ private:
     void createSyncObjects();
     void recreateSyncObjectsForSwapchain();
     void destroySyncObjects();
-    void createGeometryBuffers();
+    void createMeshPool();
+    void createInstanceResources();
+    void destroyInstanceResources();
     void createTextureStreamer();
     void createTimestampPool();
     void createDepthTarget();
@@ -152,17 +164,41 @@ private:
 
     uint32_t currentFrame_ = 0;
 
-    // Cube geometry is static once uploaded: one buffer each, not one per
-    // frame in flight, unlike simple-vk's live-edited triangle vertices.
-    VkBuffer vertexBuffer_ = VK_NULL_HANDLE;
-    VmaAllocation vertexBufferAllocation_ = VK_NULL_HANDLE;
-    VkBuffer indexBuffer_ = VK_NULL_HANDLE;
-    VmaAllocation indexBufferAllocation_ = VK_NULL_HANDLE;
+    // Cube geometry lives in the shared mesh pool: one vertex buffer, one
+    // index buffer, subrange allocation. Static once uploaded, like the
+    // single dedicated buffers this replaced.
+    std::unique_ptr<MeshPool> meshPool_;
+    MeshRange cubeMesh_{};
 
-    // Scaffolding for GPU-driven draw submission: a real draw-parameter
-    // buffer even though this landing only ever puts one command in it.
-    VkBuffer indirectBuffer_ = VK_NULL_HANDLE;
-    VmaAllocation indirectBufferAllocation_ = VK_NULL_HANDLE;
+    // Per-instance data the World pass reads via an SSBO (set 1), indexed
+    // by gl_InstanceIndex. Capacity is sized for a real scene even though
+    // only slot 0 (the cube) is ever populated this landing; see the
+    // wiki's Rendering page. One buffer pair per frame in flight, like
+    // simple-vk's old per-frame vertex buffers, since CPU writes a new
+    // model/visible/bounds every frame and a previous frame's draw might
+    // still be reading the other copy.
+    static constexpr uint32_t kMaxInstances = 256;
+
+    // The concrete per-slot layout (GpuInstance: model, bounds, texture
+    // index, visible flag, generation) lives in Renderer.cpp next to the
+    // code that writes it and cube.vert's matching std430 struct, not
+    // here - instanceMapped below is untyped for exactly that reason.
+    struct InstanceFrame {
+        VkBuffer instanceBuffer = VK_NULL_HANDLE;
+        VmaAllocation instanceAllocation = VK_NULL_HANDLE;
+        void* instanceMapped = nullptr;
+        VkBuffer indirectBuffer = VK_NULL_HANDLE;
+        VmaAllocation indirectAllocation = VK_NULL_HANDLE;
+        void* indirectMapped = nullptr;
+        VkDescriptorSet instanceSet = VK_NULL_HANDLE;
+    };
+    std::array<InstanceFrame, kFramesInFlight> instanceFrames_{};
+    VkDescriptorSetLayout instanceSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool instanceDescriptorPool_ = VK_NULL_HANDLE;
+
+    uint32_t lastInstanceCount_ = 0;
+    uint32_t lastDrawCount_ = 0;
+    uint32_t lastTriangleCount_ = 0;
 
     VkImage depthImage_ = VK_NULL_HANDLE;
     VmaAllocation depthImageAllocation_ = VK_NULL_HANDLE;
