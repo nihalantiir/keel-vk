@@ -109,7 +109,8 @@ keel-vk/
 ├── .github/workflows/    CI (configure + build, both ImGui on and off)
 └── src/
     ├── keel-vk/          boilerplate layer: simple-vk's bootstrap, absorbed and tightened
-    ├── renderer/         foundation: pipeline, depth, bindless/array/atlas textures, indirect draw
+    ├── frame/            foundation: frame::Camera (view/proj, floating origin, reverse-Z)
+    ├── renderer/         foundation: pipeline, depth, mesh pool, instances, bindless/array/atlas textures
     ├── debug/            Dear ImGui overlay, gated by KEEL_VK_IMGUI (debug only, never the product UI)
     ├── shared/           foundation: keel::World (EnTT), keel::Vfs, shared::FixedClock
     ├── net/              foundation: net::Host, a transport-only ENet wrap
@@ -119,8 +120,9 @@ keel-vk/
 ```
 
 `src/keel-vk/` is boilerplate, not "the engine": it stays generic and
-never learns about meshes, instances, packs, ENet, or EnTT. `src/renderer/`,
-`src/shared/`, and `src/net/` are the foundation layer this template adds.
+never learns about meshes, instances, packs, ENet, or EnTT. `src/frame/`,
+`src/renderer/`, `src/shared/`, and `src/net/` are the foundation layer
+this template adds.
 A game built on Keel lives in its *own* repo, not inside this one. See
 [Architecture](https://github.com/nihalantiir/keel-vk/wiki/Architecture).
 
