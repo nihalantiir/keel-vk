@@ -758,10 +758,9 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
     const VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Tumbles continuously around two axes; no input, purely time-driven.
-    const glm::mat4 model =
-        glm::rotate(glm::mat4(1.0f), elapsedTimeSeconds_ * 0.6f, glm::vec3(0.0f, 1.0f, 0.0f)) *
-        glm::rotate(glm::mat4(1.0f), elapsedTimeSeconds_ * 0.4f, glm::vec3(1.0f, 0.0f, 0.0f));
+    // model_ is set each frame in main() from a keel::World entity's
+    // Transform (see src/shared/Components.h's toMatrix); Renderer only
+    // consumes it here.
     const glm::mat4 view = glm::lookAt(glm::vec3(2.2f, 1.8f, 2.6f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
@@ -771,7 +770,7 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
     proj[1][1] *= -1.0f;
 
     PushConstants pushConstants{};
-    pushConstants.mvp = proj * view * model;
+    pushConstants.mvp = proj * view * model_;
     pushConstants.time = elapsedTimeSeconds_;
     pushConstants.phaseSpeed = phaseSpeedDegPerSec_;
     pushConstants.textureIndex = 0; // the checker texture's bindless slot

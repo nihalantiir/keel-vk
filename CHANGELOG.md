@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `src/client/ActionMap`: lifts SDL3 key events into named actions.
   `Pause` (Space) freezes the cube's rotation and hue phase; `Escape` quits.
   Both are wired into `main()`'s loop alongside the existing event polling.
+- `keel::World` (`src/shared/World.h`), a thin facade over EnTT
+  (`skypjack/entt`, pinned `v4.0.0`, vendored via FetchContent, header-only).
+  Engine-level components only (`Transform`, `Name`, `NetId`, `Bounds`, the
+  `Visible` tag), no gameplay components. `main()` creates one entity with
+  a `Transform` and updates its rotation each frame; `Renderer::setModel()`
+  now consumes that entity's model matrix instead of computing rotation
+  internally, so the World's Transform is the real source of truth for
+  what the indirect draw renders.
 
 ## [0.1.0] - 2026-08-28
 

@@ -3,6 +3,8 @@
 #include "../keel-vk/Window.h"
 #include "../renderer/Renderer.h"
 #include "../shared/Clock.h"
+#include "../shared/Components.h"
+#include "../shared/World.h"
 #include "ActionMap.h"
 
 #if KEEL_VK_IMGUI
@@ -26,6 +28,12 @@ int main() {
 #endif
         client::ActionMap actionMap;
         shared::FixedClock fixedClock;
+
+        keel::World world;
+        const keel::EntityId cube = world.createEntity();
+        world.addComponent<keel::Transform>(cube);
+        world.addComponent<keel::Name>(cube, "Cube");
+        world.addComponent<keel::Visible>(cube);
 
         Uint64 lastTicks = SDL_GetPerformanceCounter();
         const Uint64 frequency = SDL_GetPerformanceFrequency();
@@ -66,6 +74,16 @@ int main() {
                 // accumulator from growing unbounded if the app is paused
                 // in a debugger or otherwise stalls for a long frame.
             }
+
+            // The cube's Transform is the single source of truth for its
+            // model matrix: Renderer only consumes whatever setModel() is
+            // given, it doesn't compute rotation itself.
+            if (!renderer.paused()) {
+                keel::Transform& transform = world.getComponent<keel::Transform>(cube);
+                transform.eulerAnglesRadians.y += deltaTime * 0.6f;
+                transform.eulerAnglesRadians.x += deltaTime * 0.4f;
+            }
+            renderer.setModel(keel::toMatrix(world.getComponent<keel::Transform>(cube)));
 
 #if KEEL_VK_IMGUI
             debugUi.beginFrame();

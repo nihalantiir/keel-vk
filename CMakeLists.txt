@@ -89,13 +89,24 @@ if(NOT TARGET glm::glm)
   add_library(glm::glm ALIAS glm)
 endif()
 
+include(FetchContent)
+set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/external" CACHE PATH "" FORCE)
+
+# --- EnTT (header-only, vendored via FetchContent into external/, pinned tag) ---
+# Always fetched: keel::World (src/shared/World.h) wraps it and the client
+# always uses it, unlike Dear ImGui which is optional.
+FetchContent_Declare(
+  entt
+  GIT_REPOSITORY https://github.com/skypjack/entt.git
+  GIT_TAG v4.0.0
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(entt) # provides the EnTT::EnTT target itself
+
 # --- Dear ImGui (vendored via FetchContent into external/, pinned commit) ---
 # Gated behind KEEL_VK_IMGUI: OFF skips the fetch entirely, so configure
 # needs no network access and src/debug/ isn't compiled.
 if(KEEL_VK_IMGUI)
-  include(FetchContent)
-  set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/external" CACHE PATH "" FORCE)
-
   FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -162,6 +173,7 @@ target_link_libraries(keel-vk PRIVATE
   GPUOpen::VulkanMemoryAllocator
   SDL3::SDL3
   glm::glm
+  EnTT::EnTT
 )
 if(KEEL_VK_IMGUI)
   target_link_libraries(keel-vk PRIVATE imgui)
