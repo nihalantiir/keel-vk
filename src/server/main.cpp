@@ -10,7 +10,7 @@
 
 int main() {
     try {
-        std::cout << "keel-vk-server: working (v0.5.0)" << std::endl;
+        std::cout << "keel-vk-server: working (v0.6.0)" << std::endl;
 
         if (!net::Host::initialize()) {
             throw std::runtime_error("Failed to initialize ENet");

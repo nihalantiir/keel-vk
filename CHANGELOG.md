@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-28
+
+Limits, queues, config, axes. No new rendering paths.
+
+### Added
+
+- `client::Config` gathers window size, present-mode preference, a
+  packages-root override, and `--connect` into one struct. Load order:
+  defaults, then an optional `keel.toml`/`keel.json` next to the
+  executable, then CLI arguments. No parser dependency: two small
+  hand-rolled readers, same tradeoff as `Vfs`'s existing `package.json`
+  extractor.
+- `client::Axes`: mouse-delta and WASD (as a -1..1 pair) axis bindings on
+  `ActionMap`, alongside the existing digital actions. Pure data - no
+  camera controller reads them yet; the debug overlay shows the raw
+  values so the plumbing is visible without one.
+
+### Changed
+
+- The device pick now queries `VkPhysicalDeviceDescriptorIndexingProperties`
+  and clamps the bindless array to what the device actually supports
+  instead of assuming 256 is always safe. `bufferDeviceAddress` is
+  enabled if present but no longer required - nothing in this codebase
+  uses it.
+- The dedicated transfer queue is gone. Every upload (textures, mesh
+  data) goes through the graphics queue with `EXCLUSIVE` image sharing;
+  the old `CONCURRENT` sharing mode masked a real synchronization gap
+  that a dedicated queue would have needed release/acquire barriers to
+  close correctly, for bandwidth that was never more than theoretical at
+  this project's upload sizes.
+- `keel::Vfs` throws on a missing packages root instead of silently
+  mounting nothing - a typo'd override or an uncopied `packages/` now
+  fails loudly at startup.
+- `keel::Swapchain` takes a preferred present mode (falls back mailbox,
+  then fifo) instead of hardcoding mailbox-or-fifo.
+
+### Fixed
+
+- Comments in `Renderer.cpp` referencing an internal "slice 2" milestone
+  name, meaningless to a fresh reader, reworded to describe the current
+  state directly. Wiki `Home`'s Layer 1 description was missing
+  `src/frame/`. Wiki `Build` didn't say which CMake presets are actually
+  ship-clean on MSVC (`release`/`ship`; `relwithdebinfo` keeps
+  incremental linking on purpose).
+
 ## [0.5.0] - 2026-08-28
 
 Hygiene release. No new systems, no architecture changes.
