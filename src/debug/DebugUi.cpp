@@ -105,6 +105,11 @@ void DebugUi::drawOverlay() {
 
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::Text("%.2f ms (%.0f FPS)", 1000.0f / io.Framerate, io.Framerate);
+    if (renderer_.gpuTimestampsSupported()) {
+        ImGui::Text("GPU: %.2f ms", renderer_.gpuFrameTimeMs());
+    } else {
+        ImGui::TextDisabled("GPU: timestamps unavailable");
+    }
 
     const VkExtent2D extent = swapchain_.extent();
     ImGui::Text("Swapchain %ux%u, %s", extent.width, extent.height, presentModeLabel(swapchain_.presentMode()));

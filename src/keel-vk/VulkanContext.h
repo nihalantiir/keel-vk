@@ -13,6 +13,12 @@ class Window;
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphicsFamily;
     std::optional<uint32_t> presentFamily;
+    // A queue family with TRANSFER but not GRAPHICS: present on most
+    // discrete GPUs, absent on many integrated ones. Optional by design;
+    // callers doing a one-shot upload should prefer it when present and
+    // fall back to the graphics queue otherwise (see
+    // VulkanContext::uploadQueue()).
+    std::optional<uint32_t> dedicatedTransferFamily;
     bool isComplete() const { return graphicsFamily.has_value() && presentFamily.has_value(); }
 };
 
@@ -33,6 +39,18 @@ public:
     VmaAllocator allocator() const { return allocator_; }
     const QueueFamilyIndices& queueFamilies() const { return queueFamilyIndices_; }
 
+    // For one-shot uploads only (see the wiki's Rendering page): the
+    // dedicated transfer queue if the device has one, the graphics queue
+    // otherwise. Never used for the per-frame streaming path, which stays
+    // on the graphics queue/command buffer to avoid cross-queue
+    // synchronization on the hot path.
+    bool hasDedicatedTransferQueue() const { return queueFamilyIndices_.dedicatedTransferFamily.has_value(); }
+    VkQueue uploadQueue() const { return hasDedicatedTransferQueue() ? transferQueue_ : graphicsQueue_; }
+    uint32_t uploadQueueFamily() const {
+        return hasDedicatedTransferQueue() ? queueFamilyIndices_.dedicatedTransferFamily.value()
+                                            : queueFamilyIndices_.graphicsFamily.value();
+    }
+
 private:
     void createInstance(Window& window);
     void setupDebugMessenger();
@@ -49,6 +67,7 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkQueue graphicsQueue_ = VK_NULL_HANDLE;
     VkQueue presentQueue_ = VK_NULL_HANDLE;
+    VkQueue transferQueue_ = VK_NULL_HANDLE; // VK_NULL_HANDLE if no dedicated family was found
     VmaAllocator allocator_ = VK_NULL_HANDLE;
     QueueFamilyIndices queueFamilyIndices_;
     bool validationEnabled_ = false;

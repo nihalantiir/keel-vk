@@ -5,94 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-08-28
 
-### Changed
-
-- README: `Keel` heading, centered banner, badge row (License, Release,
-  CI, Platforms, C++20, Vulkan 1.3), documentation section now links the
-  wiki instead of in-tree docs.
-- Moved `docs/*.md` to the wiki (Architecture, Vulkan bootstrap, Device
-  contract, Rendering, Shaders, Libraries, Extending, Coding conventions,
-  Build, Troubleshooting, plus a rewritten Home). `docs/` no longer exists
-  in the repo.
-- Repo description and topics set on GitHub.
+The cube gains an entity behind it, a texture, three ways to store
+textures, and a network transport, without becoming a game. Public face
+(README, banner) now matches what actually runs, and deeper docs moved to
+the wiki.
 
 ### Added
 
-- `.github/banner.svg`: a real perspective cube at a fixed rotation,
-  computed from the same camera sense and per-face hue mapping the
-  renderer uses, replacing an earlier flat isometric placeholder.
-- Bindless texture on the cube: an update-after-bind sampled-image
-  descriptor array (the device contract already required the feature bits;
-  this is the first thing to use them), with one slot filled by a
-  checker texture uploaded through a one-shot transfer. `cube.vert`/
-  `cube.frag` gained a UV attribute and sample the bindless array by
-  push-constant index, modulated by the existing hue-phase color. Overlay
-  shows slots used.
+- **ECS**: `keel::World` (`src/shared/World.h`), a thin facade over EnTT
+  (`skypjack/entt`, pinned `v4.0.0`, vendored, header-only), holding
+  engine-level components only (`Transform`, `Name`, `NetId`, `Bounds`, a
+  `Visible` tag - see `src/shared/Components.h`). `main()` creates one
+  entity with a `Transform`; its matrix, not an internal calculation in
+  `Renderer`, now drives the cube's rotation.
+- **Input**: `src/client/ActionMap` lifts SDL3 key events into named
+  actions. Space toggles pause (freezes rotation and hue phase), Escape
+  quits.
+- **Fixed timestep**: `src/shared/Clock.h`'s `FixedClock`, a generic
+  accumulator not tied to SDL or Vulkan, wired into the client loop and
+  reserved for a future fixed-rate system (none exists yet).
+- **Networking**: `net::Host` (`src/net/Host.h`), a transport-only ENet
+  wrap (`lsalzman/enet`, pinned `v1.3.18`, vendored, built as a small
+  static library). `src/net/Protocol.h` defines a one-byte version plus a
+  message type; `Heartbeat` is the only message so far. `keel-vk-server`
+  always listens on UDP 7777 and remains Vulkan/SDL-free; `keel-vk` (the
+  client) stays idle over the network unless launched with `--connect` or
+  `--connect=host[:port]`.
+- **Content packs**: `keel::Vfs` (`src/shared/Vfs.h`) mounts every
+  subdirectory of `packages/` that has a `package.json`. `packages/base/`
+  is the first real package; the cube's checker texture now loads through
+  it instead of being generated inline.
+- **Bindless textures**: the cube samples from a 256-slot,
+  update-after-bind sampled-image descriptor array
+  (`src/renderer/TextureStreamer`) - the device contract already required
+  the feature bits this uses. It's a real streaming pool, not one static
+  texture: `allocate`/`update`/`free`, a ring of persistently-mapped
+  staging buffers, per-slot generations, and uploads queued and drained
+  once per frame without ever blocking the render loop (the one
+  `vkQueueWaitIdle` left in the texture path is a single flush before the
+  first frame). The debug overlay's texture-slot selector, "Regenerate
+  active" button, and "Free + reallocate spare slot" button exercise all
+  three live.
+- **Two more texture-storage paths**, populated but not yet sampled by
+  anything, to prove each works before something needs it:
+  `src/renderer/TextureArray2D` (one image, many same-size layers, for
+  things like terrain splat layers later) and `src/renderer/Atlas2D` (one
+  packed page with a shelf packer and a UV rect table, for UI/glyphs
+  later).
+- **Dedicated transfer queue**: `VulkanContext` now discovers a
+  transfer-only queue family when the device has one and exposes it as
+  `uploadQueue()`. Construction-time texture uploads (the streamer's
+  startup flush, the array, the atlas) run on it via `VK_SHARING_MODE_CONCURRENT`
+  images, falling back to the graphics queue on devices without one. The
+  per-frame streaming path deliberately stays on the graphics queue to
+  avoid cross-queue synchronization on the hot path.
+- **GPU timing**: `VK_QUERY_TYPE_TIMESTAMP` queries around each frame's
+  render work, read back once the frame's own fence confirms completion.
+  Shown in the overlay as "GPU: N ms" alongside the existing CPU-side FPS
+  reading, or "unavailable" on a device without
+  `timestampComputeAndGraphics`.
+- **Pipeline cache on disk**: saved next to the executable on clean exit,
+  loaded on the next run so the driver can skip shader recompilation. Not
+  a correctness requirement; an invalid or missing cache is silently
+  ignored.
+- Public face: README gets a `Keel` H1, a real perspective-cube banner
+  (computed from the same camera sense and hue mapping the renderer uses,
+  not a flat isometric placeholder), and a badge row. Repo description and
+  topics set on GitHub. `docs/*.md` moved to the wiki; `docs/` no longer
+  exists in the repo.
+
+### Changed
+
 - `shaderSampledImageArrayNonUniformIndexing` added to the required device
-  contract: needed to index a bindless array with `nonuniformEXT`, which
-  the earlier descriptor-indexing feature bits alone don't cover.
-- Shader compilation now passes `--target-env=vulkan1.3` to `glslc`.
-- `src/shared/Clock.h`: a generic fixed-timestep accumulator (`FixedClock`),
-  not tied to SDL or Vulkan, reserved for future fixed-rate systems. Wired
-  into the client's main loop but not driving anything visible yet.
-- `src/client/ActionMap`: lifts SDL3 key events into named actions.
-  `Pause` (Space) freezes the cube's rotation and hue phase; `Escape` quits.
-  Both are wired into `main()`'s loop alongside the existing event polling.
-- `keel::World` (`src/shared/World.h`), a thin facade over EnTT
-  (`skypjack/entt`, pinned `v4.0.0`, vendored via FetchContent, header-only).
-  Engine-level components only (`Transform`, `Name`, `NetId`, `Bounds`, the
-  `Visible` tag), no gameplay components. `main()` creates one entity with
-  a `Transform` and updates its rotation each frame; `Renderer::setModel()`
-  now consumes that entity's model matrix instead of computing rotation
-  internally, so the World's Transform is the real source of truth for
-  what the indirect draw renders.
-- `src/net/Host` (`net::Host`), a transport-only ENet wrap (`lsalzman/enet`,
-  pinned `v1.3.18`, vendored via FetchContent, built as a small static
-  library). `src/net/Protocol.h` defines a one-byte version plus a
-  `MessageType` header; `Heartbeat` is the only message type. `keel-vk-server`
-  always listens on UDP 7777; `keel-vk` (the client) links ENet but stays
-  entirely idle (no host constructed, no ENet init) unless launched with
-  `--connect` or `--connect=host[:port]`. Windows-only fix: ENet's own
-  CMakeLists doesn't link `ws2_32`/`winmm`, so the `enet` target does that
-  itself for every consumer.
-- Fixed a real bug caught while testing the above: `Host::service()`'s
-  event-drain loop never re-polled `enet_host_service`, so it would only
-  ever see the first event per call (or hang draining a stale one).
-- `keel::Vfs` (`src/shared/Vfs.h`), a content-pack VFS: mounts every
-  subdirectory of `<SDL_GetBasePath()>packages/` with a `package.json` at
-  startup, and resolves relative paths against mounted packages.
-  `packages/base/package.json` is the first real package, and the cube's
-  checker texture now loads through the VFS from
-  `packages/base/textures/checker.rgba8` (raw RGBA8 bytes, still no
-  image-loading library) instead of being generated procedurally.
-  `packages/` is copied next to the built executable by CMake.
-- Texture atlas (`src/renderer/Atlas2D`) and texture array
-  (`src/renderer/TextureArray2D`), two more texture-storage paths
-  alongside the bindless array, each suited to a different access
-  pattern: the atlas packs small, differently-sized images into one page
-  with a shelf packer and a UV rect table (for UI/glyphs later); the
-  array holds many same-size tiles as layers of one image (for things
-  like terrain splat layers or animation frames later). Neither is
-  sampled by the cube yet; both are populated at construction to prove
-  the path works.
-- The bindless array (`TextureStreamer`) grew from a single static
-  texture into a real streaming pool: `allocate`/`update`/`free`, a
-  ring of persistently-mapped staging buffers, and per-slot generations
-  so a freed-and-reallocated slot can't be confused with what used to be
-  there. Uploads are queued and drained once per frame
-  (`processUploads`), never blocking the render loop; the only
-  `vkQueueWaitIdle` left in the texture path is a single startup flush
-  before the first frame. The debug overlay's texture-slot selector,
-  "Regenerate active" button, and "Free + reallocate spare slot" button
-  exercise all three live. Capacity grew from 16 to 256 slots.
-- Fixed a real bug caught while testing the above: the startup batch
-  queues more textures than fit in the staging ring before the first
-  flush, and the resulting exception left already-created vertex/index/
-  indirect buffers leaked (their cleanup lives in `~Renderer()`, which
-  never runs on a failed constructor). Fixed by sizing the ring to
-  comfortably exceed the startup batch.
+  contract: indexing a bindless array with `nonuniformEXT` needs it
+  specifically, on top of the descriptor-indexing bits already required.
+- Shader compilation now passes `--target-env=vulkan1.3` to `glslc`, so
+  the descriptor-indexing SPIR-V bindless texturing needs actually
+  matches the device contract.
+- CMake project version (and the window title) is now 0.2.0.
+
+### Fixed
+
+- `Host::service()`'s event-drain loop never re-polled `enet_host_service`,
+  so it would only ever see the first queued event per call.
+- The texture streamer's startup batch could queue more uploads than the
+  staging ring had room for; the resulting exception mid-construction
+  leaked already-created vertex/index/indirect buffers (their cleanup
+  lives in `~Renderer()`, which never runs on a failed constructor). Fixed
+  by sizing the ring to comfortably exceed the startup batch.
+- A one-shot upload barrier unconditionally targeted the fragment shader
+  stage, which is invalid when that command buffer is recorded against a
+  transfer-only queue family - only reproduced once the dedicated
+  transfer queue above was actually wired up and exercised on real
+  hardware with one.
+- Reading back a GPU timestamp query before its first
+  `vkCmdWriteTimestamp2` is a validation error, not just "not ready yet":
+  a freshly created query is uninitialized, not merely unavailable. Fixed
+  by tracking which frame slots have completed at least one write.
 
 ## [0.1.0] - 2026-08-28
 

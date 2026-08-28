@@ -66,8 +66,21 @@ TextureArray2D::TextureArray2D(keel::VulkanContext& context, VkCommandPool comma
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    // CONCURRENT when a dedicated transfer queue exists: this upload runs
+    // on that queue (see below), and CONCURRENT avoids needing an explicit
+    // queue-family ownership transfer to hand the image to the graphics
+    // queue for sampling.
+    const uint32_t concurrentFamilies[] = {context_.queueFamilies().graphicsFamily.value(),
+                                            context_.uploadQueueFamily()};
+    if (context_.hasDedicatedTransferQueue()) {
+        imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        imageInfo.queueFamilyIndexCount = 2;
+        imageInfo.pQueueFamilyIndices = concurrentFamilies;
+    } else {
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
 
     VmaAllocationCreateInfo imageAllocInfo{};
     imageAllocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -115,8 +128,13 @@ TextureArray2D::TextureArray2D(keel::VulkanContext& context, VkCommandPool comma
     VkImageMemoryBarrier2 toShaderRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     toShaderRead.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     toShaderRead.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    toShaderRead.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    toShaderRead.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    // ALL_COMMANDS/MEMORY_READ, not FRAGMENT_SHADER/SHADER_READ: this
+    // command buffer may be recorded against a transfer-only queue family
+    // (see VulkanContext::uploadQueue), and FRAGMENT_SHADER is not a valid
+    // destination stage there. The coarser mask costs nothing on a
+    // one-shot startup upload.
+    toShaderRead.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    toShaderRead.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT;
     toShaderRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     toShaderRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     toShaderRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -135,9 +153,9 @@ TextureArray2D::TextureArray2D(keel::VulkanContext& context, VkCommandPool comma
     VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
-    keel::vkCheck(vkQueueSubmit2(context_.graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE),
+    keel::vkCheck(vkQueueSubmit2(context_.uploadQueue(), 1, &submitInfo, VK_NULL_HANDLE),
                   "Failed to submit texture array upload");
-    keel::vkCheck(vkQueueWaitIdle(context_.graphicsQueue()), "Failed to wait for texture array upload");
+    keel::vkCheck(vkQueueWaitIdle(context_.uploadQueue()), "Failed to wait for texture array upload");
     vkFreeCommandBuffers(context_.device(), commandPool, 1, &cmd);
     vmaDestroyBuffer(context_.allocator(), stagingBuffer, stagingAllocation);
 

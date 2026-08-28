@@ -14,6 +14,9 @@ CMakeUserPresets.json
 # Dear ImGui window-layout state, written next to wherever the exe was run from
 imgui.ini
 
+# Vulkan pipeline cache, written next to wherever the exe was run from
+pipeline_cache.bin
+
 # OS cruft
 .DS_Store
 Thumbs.db

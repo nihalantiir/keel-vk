@@ -76,6 +76,13 @@ public:
     uint32_t textureArrayLayerCount() const;
     uint32_t atlasRectCount() const;
 
+    // GPU-side frame time from VK_QUERY_TYPE_TIMESTAMP, distinct from the
+    // overlay's existing CPU-side ImGui::GetIO().Framerate reading. Absent
+    // on a device without VkPhysicalDeviceLimits::timestampComputeAndGraphics
+    // (rare on desktop GPUs, not part of the required device contract).
+    bool gpuTimestampsSupported() const { return timestampsSupported_; }
+    float gpuFrameTimeMs() const { return lastGpuFrameMs_; }
+
     // ImGui's own pipeline must declare this too: it draws inside the same
     // dynamic rendering scope with a depth attachment bound, and Vulkan
     // requires a bound pipeline's declared depth format to match even when
@@ -87,15 +94,19 @@ private:
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
     void createCommandPool();
+    void createUploadCommandPool();
     void createCommandBuffers();
     void createSyncObjects();
     void recreateSyncObjectsForSwapchain();
     void destroySyncObjects();
     void createGeometryBuffers();
     void createTextureStreamer();
+    void createTimestampPool();
     void createDepthTarget();
     void destroyDepthTarget();
     void createPipeline();
+    void loadPipelineCache();
+    void savePipelineCache();
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, debug::DebugUi* debugUi);
 
     keel::VulkanContext& context_;
@@ -105,6 +116,13 @@ private:
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers_;
+
+    // Bound to VulkanContext::uploadQueueFamily(): the dedicated transfer
+    // family if the device has one, otherwise the same family as
+    // commandPool_. Used only for construction-time one-shot uploads (the
+    // texture streamer's startup flush, the array, the atlas); never on
+    // the per-frame path.
+    VkCommandPool uploadCommandPool_ = VK_NULL_HANDLE;
 
     std::vector<VkSemaphore> imageAvailableSemaphores_; // one per frame in flight
     std::vector<VkSemaphore> renderFinishedSemaphores_; // one per swapchain image
@@ -146,6 +164,21 @@ private:
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    // Loaded from (and saved back to) a file next to the executable so a
+    // second run's pipeline creation can skip driver shader recompilation.
+    // Not a correctness requirement (an empty/invalid cache is silently
+    // ignored by the driver), purely a warm-start optimization.
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
+
+    VkQueryPool timestampPool_ = VK_NULL_HANDLE; // 2 queries per frame in flight: start, end
+    bool timestampsSupported_ = false;
+    float timestampPeriodNs_ = 0.0f;
+    float lastGpuFrameMs_ = 0.0f;
+    // A freshly created query is uninitialized, not merely "unavailable":
+    // reading it before its first vkCmdResetQueryPool + vkCmdWriteTimestamp2
+    // is a validation error, not just VK_NOT_READY. Tracks which frame
+    // slots have completed that at least once.
+    std::array<bool, kFramesInFlight> timestampSlotReady_{};
 
     float clearColor_[3] = {0.15f, 0.15f, 0.16f};
     float phaseSpeedDegPerSec_ = 60.0f;

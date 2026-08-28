@@ -170,11 +170,13 @@ std::vector<uint8_t> makeSolidPattern(uint32_t width, uint32_t height, uint8_t r
 Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window, keel::Vfs& vfs)
     : context_(context), swapchain_(swapchain), window_(window), vfs_(vfs) {
     createCommandPool();
+    createUploadCommandPool();
     createCommandBuffers();
     createSyncObjects();
+    createTimestampPool();
     createGeometryBuffers();
     createTextureStreamer();
-    textureArray_ = std::make_unique<TextureArray2D>(context_, commandPool_, 64, 16);
+    textureArray_ = std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16);
     // "hello", 5 glyph-shaped placeholder rects: proves the shelf packer
     // and UV table without needing real glyph rendering yet.
     {
@@ -186,7 +188,7 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
             {10, 20, swatchB.data()},
             {14, 20, swatchC.data()},
         };
-        atlas_ = std::make_unique<Atlas2D>(context_, commandPool_, 256, entries);
+        atlas_ = std::make_unique<Atlas2D>(context_, uploadCommandPool_, 256, entries);
     }
     createDepthTarget();
     createPipeline();
@@ -194,6 +196,14 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
 
 Renderer::~Renderer() {
     vkDeviceWaitIdle(context_.device());
+
+    savePipelineCache();
+    if (pipelineCache_ != VK_NULL_HANDLE) {
+        vkDestroyPipelineCache(context_.device(), pipelineCache_, nullptr);
+    }
+    if (timestampPool_ != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(context_.device(), timestampPool_, nullptr);
+    }
 
     if (pipeline_ != VK_NULL_HANDLE) {
         vkDestroyPipeline(context_.device(), pipeline_, nullptr);
@@ -218,6 +228,9 @@ Renderer::~Renderer() {
     }
 
     destroySyncObjects();
+    if (uploadCommandPool_ != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(context_.device(), uploadCommandPool_, nullptr);
+    }
     if (commandPool_ != VK_NULL_HANDLE) {
         vkDestroyCommandPool(context_.device(), commandPool_, nullptr);
     }
@@ -232,6 +245,19 @@ void Renderer::createCommandPool() {
                   "Failed to create command pool");
     keel::setDebugObjectName(context_.device(), VK_OBJECT_TYPE_COMMAND_POOL,
                               reinterpret_cast<uint64_t>(commandPool_), "command pool");
+}
+
+void Renderer::createUploadCommandPool() {
+    VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = context_.uploadQueueFamily();
+
+    keel::vkCheck(vkCreateCommandPool(context_.device(), &poolInfo, nullptr, &uploadCommandPool_),
+                  "Failed to create upload command pool");
+    keel::setDebugObjectName(context_.device(), VK_OBJECT_TYPE_COMMAND_POOL,
+                              reinterpret_cast<uint64_t>(uploadCommandPool_),
+                              context_.hasDedicatedTransferQueue() ? "upload command pool (dedicated transfer)"
+                                                                    : "upload command pool (graphics)");
 }
 
 void Renderer::createCommandBuffers() {
@@ -278,6 +304,24 @@ void Renderer::createSyncObjects() {
     }
 
     imagesInFlight_.assign(swapchain_.imageCount(), VK_NULL_HANDLE);
+}
+
+void Renderer::createTimestampPool() {
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(context_.physicalDevice(), &props);
+    // Not part of the required device contract: nearly universal on
+    // desktop GPUs, but a device could conformantly lack it.
+    timestampsSupported_ = props.limits.timestampComputeAndGraphics && props.limits.timestampPeriod > 0.0f;
+    if (!timestampsSupported_) {
+        return;
+    }
+    timestampPeriodNs_ = props.limits.timestampPeriod;
+
+    VkQueryPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    poolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    poolInfo.queryCount = static_cast<uint32_t>(kFramesInFlight) * 2; // start + end per frame in flight
+    keel::vkCheck(vkCreateQueryPool(context_.device(), &poolInfo, nullptr, &timestampPool_),
+                  "Failed to create timestamp query pool");
 }
 
 void Renderer::recreateSyncObjectsForSwapchain() {
@@ -386,9 +430,11 @@ void Renderer::createTextureStreamer() {
     // buffer to defer to. This is the only wait-idle anywhere in the
     // texture path; every later allocate()/update()/free() during the
     // running app is drained by processUploads() inside the normal
-    // per-frame command buffer instead (see recordCommandBuffer).
+    // per-frame command buffer instead (see recordCommandBuffer). Runs on
+    // the dedicated transfer queue if the device has one, the graphics
+    // queue otherwise (see VulkanContext::uploadQueue()).
     VkCommandBufferAllocateInfo cmdAllocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cmdAllocInfo.commandPool = commandPool_;
+    cmdAllocInfo.commandPool = uploadCommandPool_;
     cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAllocInfo.commandBufferCount = 1;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -406,10 +452,10 @@ void Renderer::createTextureStreamer() {
     VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
-    keel::vkCheck(vkQueueSubmit2(context_.graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE),
+    keel::vkCheck(vkQueueSubmit2(context_.uploadQueue(), 1, &submitInfo, VK_NULL_HANDLE),
                   "Failed to submit startup texture upload");
-    keel::vkCheck(vkQueueWaitIdle(context_.graphicsQueue()), "Failed to wait for startup texture upload");
-    vkFreeCommandBuffers(context_.device(), commandPool_, 1, &cmd);
+    keel::vkCheck(vkQueueWaitIdle(context_.uploadQueue()), "Failed to wait for startup texture upload");
+    vkFreeCommandBuffers(context_.device(), uploadCommandPool_, 1, &cmd);
 }
 
 void Renderer::regenerateActiveTexture() {
@@ -499,7 +545,56 @@ void Renderer::destroyDepthTarget() {
     }
 }
 
+void Renderer::loadPipelineCache() {
+    const char* basePath = SDL_GetBasePath();
+    const std::string path = (basePath ? std::string(basePath) : std::string()) + "pipeline_cache.bin";
+
+    std::vector<char> data;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (file.is_open()) {
+        const std::streamsize size = file.tellg();
+        if (size > 0) {
+            data.resize(static_cast<size_t>(size));
+            file.seekg(0);
+            file.read(data.data(), size);
+        }
+    }
+
+    VkPipelineCacheCreateInfo cacheInfo{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    cacheInfo.initialDataSize = data.size();
+    cacheInfo.pInitialData = data.empty() ? nullptr : data.data();
+    // An empty/mismatched-device cache is silently ignored by the driver
+    // (falls back to building from scratch), so no validity check is
+    // needed here beyond "did the file exist".
+    keel::vkCheck(vkCreatePipelineCache(context_.device(), &cacheInfo, nullptr, &pipelineCache_),
+                  "Failed to create pipeline cache");
+}
+
+void Renderer::savePipelineCache() {
+    if (pipelineCache_ == VK_NULL_HANDLE) {
+        return;
+    }
+    size_t size = 0;
+    vkGetPipelineCacheData(context_.device(), pipelineCache_, &size, nullptr);
+    if (size == 0) {
+        return;
+    }
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(context_.device(), pipelineCache_, &size, data.data()) != VK_SUCCESS) {
+        return;
+    }
+
+    const char* basePath = SDL_GetBasePath();
+    const std::string path = (basePath ? std::string(basePath) : std::string()) + "pipeline_cache.bin";
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (file.is_open()) {
+        file.write(data.data(), static_cast<std::streamsize>(size));
+    }
+}
+
 void Renderer::createPipeline() {
+    loadPipelineCache();
+
     keel::ShaderModule vertShader(context_, "shaders/cube.vert.spv", "cube.vert");
     keel::ShaderModule fragShader(context_, "shaders/cube.frag.spv", "cube.frag");
 
@@ -616,7 +711,7 @@ void Renderer::createPipeline() {
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pipelineLayout_;
 
-    keel::vkCheck(vkCreateGraphicsPipelines(context_.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_),
+    keel::vkCheck(vkCreateGraphicsPipelines(context_.device(), pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline_),
                   "Failed to create graphics pipeline");
     keel::setDebugObjectName(context_.device(), VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(pipeline_),
                               "cube pipeline");
@@ -630,6 +725,16 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
     // from the debug overlay) before anything below might sample the slot
     // they touch. Never blocks: no vkQueueWaitIdle anywhere in this path.
     textureStreamer_->processUploads(cmd);
+
+    if (timestampsSupported_) {
+        // Reset before write, not read: the corresponding
+        // vkGetQueryPoolResults call happens in drawFrame(), after this
+        // frame slot's fence wait guarantees the previous use of these two
+        // queries has completed.
+        vkCmdResetQueryPool(cmd, timestampPool_, currentFrame_ * 2, 2);
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timestampPool_, currentFrame_ * 2 + 0);
+        timestampSlotReady_[currentFrame_] = true;
+    }
 
     const VkImage image = swapchain_.images()[imageIndex];
     const VkImageView imageView = swapchain_.imageViews()[imageIndex];
@@ -742,6 +847,10 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
 
     vkCmdEndRendering(cmd);
 
+    if (timestampsSupported_) {
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, timestampPool_, currentFrame_ * 2 + 1);
+    }
+
     VkImageMemoryBarrier2 toPresent{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     toPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -777,6 +886,20 @@ void Renderer::drawFrame(debug::DebugUi* debugUi) {
     const VkDevice device = context_.device();
 
     vkWaitForFences(device, 1, &inFlightFences_[currentFrame_], VK_TRUE, UINT64_MAX);
+
+    // This frame slot's previous pair of timestamp writes is now
+    // guaranteed complete - except on this slot's very first use, when the
+    // queries have never been reset (an uninitialized query is a
+    // validation error to read, not just VK_NOT_READY).
+    if (timestampsSupported_ && timestampSlotReady_[currentFrame_]) {
+        uint64_t timestamps[2] = {0, 0};
+        const VkResult queryResult =
+            vkGetQueryPoolResults(device, timestampPool_, currentFrame_ * 2, 2, sizeof(timestamps), timestamps,
+                                   sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+        if (queryResult == VK_SUCCESS) {
+            lastGpuFrameMs_ = static_cast<float>(timestamps[1] - timestamps[0]) * timestampPeriodNs_ / 1.0e6f;
+        }
+    }
 
     uint32_t imageIndex = 0;
     const VkResult acquireResult = vkAcquireNextImageKHR(
