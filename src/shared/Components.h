@@ -32,6 +32,18 @@ struct Bounds {
 // Tag: presence means "extract this entity's Transform for rendering."
 struct Visible {};
 
+// Component-wise lerp, not a slerp: fine for the small per-step rotation
+// deltas a fixed-timestep sim produces (see shared::FixedClock::alpha()),
+// but would need real quaternion interpolation for large single-step
+// rotations.
+inline Transform lerp(const Transform& a, const Transform& b, float t) {
+    Transform result;
+    result.position = glm::mix(a.position, b.position, t);
+    result.eulerAnglesRadians = glm::mix(a.eulerAnglesRadians, b.eulerAnglesRadians, t);
+    result.scale = glm::mix(a.scale, b.scale, t);
+    return result;
+}
+
 inline glm::mat4 toMatrix(const Transform& transform) {
     glm::mat4 model = glm::translate(glm::mat4(1.0f), transform.position);
     model = glm::rotate(model, transform.eulerAnglesRadians.y, glm::vec3(0.0f, 1.0f, 0.0f));

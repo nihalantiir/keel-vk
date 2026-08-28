@@ -88,6 +88,11 @@ int main(int argc, char** argv) {
         world.addComponent<keel::Name>(cube, "Cube");
         world.addComponent<keel::Visible>(cube);
 
+        // The Transform one step behind cube's current one, for
+        // interpolating render state between sim steps (see FixedClock::
+        // alpha()). Starts equal so the first frame's lerp is a no-op.
+        keel::Transform previousTransform = world.getComponent<keel::Transform>(cube);
+
         float heartbeatTimer = 0.0f;
 
         Uint64 lastTicks = SDL_GetPerformanceCounter();
@@ -123,11 +128,19 @@ int main(int argc, char** argv) {
             const float deltaTime = static_cast<float>(now - lastTicks) / static_cast<float>(frequency);
             lastTicks = now;
 
-            fixedClock.advance(deltaTime);
+            // Pause freezes sim time: advance() isn't called at all, so the
+            // accumulator stops growing and consumeStep() never fires
+            // again below until unpaused. Rendering keeps happening either
+            // way (drawFrame() runs unconditionally further down).
+            if (!renderer.paused()) {
+                fixedClock.advance(deltaTime);
+            }
             while (fixedClock.consumeStep()) {
-                // No fixed-rate system runs yet; draining keeps the
-                // accumulator from growing unbounded if the app is paused
-                // in a debugger or otherwise stalls for a long frame.
+                keel::Transform& transform = world.getComponent<keel::Transform>(cube);
+                previousTransform = transform;
+                const float stepDelta = fixedClock.fixedDelta();
+                transform.eulerAnglesRadians.y += stepDelta * 0.6f;
+                transform.eulerAnglesRadians.x += stepDelta * 0.4f;
             }
 
             if (netHost) {
@@ -139,15 +152,16 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // The cube's Transform is the single source of truth for its
-            // model matrix: Renderer only consumes whatever setModel() is
-            // given, it doesn't compute rotation itself.
-            if (!renderer.paused()) {
-                keel::Transform& transform = world.getComponent<keel::Transform>(cube);
-                transform.eulerAnglesRadians.y += deltaTime * 0.6f;
-                transform.eulerAnglesRadians.x += deltaTime * 0.4f;
-            }
-            renderer.setModel(keel::toMatrix(world.getComponent<keel::Transform>(cube)));
+            // The cube's Transform is the sim's source of truth, updated
+            // only in fixed steps above; what Renderer actually draws is
+            // interpolated between the last two steps by however far the
+            // accumulator has drifted into the next one (FixedClock::
+            // alpha()), so motion stays smooth at a frame rate that
+            // doesn't divide evenly into the fixed step.
+            const keel::Transform& currentTransform = world.getComponent<keel::Transform>(cube);
+            const keel::Transform renderTransform =
+                keel::lerp(previousTransform, currentTransform, fixedClock.alpha());
+            renderer.setModel(keel::toMatrix(renderTransform));
 
 #if KEEL_VK_IMGUI
             debugUi.beginFrame();
