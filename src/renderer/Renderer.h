@@ -67,6 +67,11 @@ public:
     // (origin, near plane) to prove the plumbing without needing input.
     frame::Camera& camera() { return camera_; }
 
+    // Distance from the origin along the camera's fixed home direction -
+    // a "dolly" slider, not free-fly input. Recomputed into camera_.position
+    // every frame in recordWorldPass; the debug overlay is the only writer.
+    float& cameraDistance() { return cameraDistance_; }
+
     // Read-only: the front face's current hue-cycled color, for the overlay.
     glm::vec3 previewColor() const;
 
@@ -277,6 +282,13 @@ private:
     bool paused_ = false;
     glm::mat4 model_{1.0f};
     frame::Camera camera_{};
+    // Set once in the constructor from the original fixed eye point;
+    // cameraDistance_ (below) scales along it every frame in
+    // recordWorldPass. Dollying in shrinks the frustum's coverage in
+    // world units, which is what actually culls satellites - see the
+    // wiki's Rendering page.
+    glm::vec3 cameraHomeDirection_{0.0f, 0.0f, 1.0f};
+    float cameraDistance_ = 1.0f;
     float elapsedTimeSeconds_ = 0.0f;
     uint64_t lastTicks_ = 0;
     bool clockStarted_ = false;

@@ -111,6 +111,16 @@ struct GpuInstance {
 // orientation; only a non-uniform scale would invalidate it.
 constexpr float kCubeBoundsRadius = 0.8660254f;
 
+// A ring of small cubes around the hero, not gameplay - population for
+// the CPU frustum cull to actually reject something. Radius/count/speed
+// are picked to sit at the edge of the default camera's ~45-degree FOV,
+// so dollying in (see Renderer::cameraDistance()) visibly starts culling
+// some of them without needing any other control.
+constexpr uint32_t kSatelliteCount = 12;
+constexpr float kSatelliteRingRadius = 1.8f;
+constexpr float kSatelliteOrbitDegPerSec = 8.0f;
+constexpr float kSatelliteScale = 0.35f;
+
 // 8x8 checkerboard, loaded from the base content pack as raw RGBA8 bytes:
 // no image-loading dependency (see the wiki's Libraries page - stb_image
 // is deliberately not in this landing), just a format known ahead of time.
@@ -194,10 +204,15 @@ std::vector<uint8_t> makeSolidPattern(uint32_t width, uint32_t height, uint8_t r
 
 Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window, keel::Vfs& vfs)
     : context_(context), swapchain_(swapchain), window_(window), vfs_(vfs) {
-    // Fixed, not input-driven: the stock cube has no camera controller (see
-    // the wiki's Extending page). Same eye point simple-vk's old lookAt used.
+    // Fixed direction, not input-driven: the stock cube has no camera
+    // controller (see the wiki's Extending page). Same eye point simple-vk's
+    // old lookAt used. cameraDistance_ (a debug "dolly" slider, see
+    // recordWorldPass) scales along this direction every frame; the
+    // direction itself never changes.
     camera_.position = glm::vec3(2.2f, 1.8f, 2.6f);
     camera_.front = glm::normalize(-camera_.position);
+    cameraHomeDirection_ = glm::normalize(camera_.position);
+    cameraDistance_ = glm::length(camera_.position);
 
     createCommandPool();
     createUploadCommandPool();
@@ -1035,6 +1050,14 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     const VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    // Dolly: scale along the fixed home direction, don't change it. A
+    // debug slider, not free-fly input - see the wiki's Rendering page
+    // for why dollying in is what actually demonstrates the frustum cull
+    // below (a fixed angular FOV covers fewer world units the closer the
+    // camera gets, so the satellite ring's edges start exceeding it).
+    camera_.position = cameraHomeDirection_ * cameraDistance_;
+    camera_.front = glm::normalize(-camera_.position);
+
     const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
     const glm::mat4 viewProj = camera_.projection(aspect) * camera_.view();
 
@@ -1095,7 +1118,56 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     }
     instances[0].visible = 1;
     instances[0].generation = 0;
-    const uint32_t writtenInstanceCount = 1;
+
+    // Satellites: a small static ring around the hero, not gameplay,
+    // just enough population for the frustum cull below to reject
+    // something real instead of always seeing exactly one instance. Same
+    // mesh as the hero, smaller scale, cycling through all three
+    // residency kinds round-robin so bindless/array/atlas are all
+    // sampled in one frame regardless of the hero's own Residency mode
+    // picker. See the wiki's Rendering page.
+    for (uint32_t i = 0; i < kSatelliteCount; ++i) {
+        const uint32_t slot = 1 + i;
+        const float baseAngleDeg = static_cast<float>(i) * (360.0f / static_cast<float>(kSatelliteCount));
+        const float angleRad = glm::radians(baseAngleDeg + elapsedTimeSeconds_ * kSatelliteOrbitDegPerSec);
+        const glm::vec3 worldPos(kSatelliteRingRadius * std::cos(angleRad), 0.0f,
+                                  kSatelliteRingRadius * std::sin(angleRad));
+        const glm::mat4 satelliteModel = glm::translate(glm::mat4(1.0f), worldPos - camera_.origin) *
+                                          glm::scale(glm::mat4(1.0f), glm::vec3(kSatelliteScale));
+
+        instances[slot].model = satelliteModel;
+        instances[slot].boundsCenterRadius =
+            glm::vec4(glm::vec3(satelliteModel[3]), kCubeBoundsRadius * kSatelliteScale);
+        instances[slot].visible = 1;
+        instances[slot].generation = 0;
+
+        switch (i % 3) {
+            case 0:
+                instances[slot].textureKind = static_cast<uint32_t>(TextureKind::Bindless);
+                instances[slot].textureIndex = demoTextures_.empty()
+                                                    ? 0
+                                                    : demoTextures_[i % demoTextures_.size()].slot;
+                instances[slot].atlasUvRect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+                break;
+            case 1: {
+                const uint32_t layerCount = textureArray_->layerCount();
+                instances[slot].textureKind = static_cast<uint32_t>(TextureKind::Array);
+                instances[slot].textureIndex = layerCount == 0 ? 0 : i % layerCount;
+                instances[slot].atlasUvRect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+                break;
+            }
+            case 2:
+            default: {
+                const std::vector<AtlasRect>& rects = atlas_->rects();
+                const AtlasRect& rect = rects.empty() ? AtlasRect{} : rects[i % rects.size()];
+                instances[slot].textureKind = static_cast<uint32_t>(TextureKind::Atlas);
+                instances[slot].textureIndex = 0;
+                instances[slot].atlasUvRect = glm::vec4(rect.u0, rect.v0, rect.u1, rect.v1);
+                break;
+            }
+        }
+    }
+    const uint32_t writtenInstanceCount = 1 + kSatelliteCount;
 
     // CPU frustum cull against each instance's bounding sphere, compacting
     // surviving draws to the front of the indirect buffer rather than

@@ -123,6 +123,8 @@ void DebugUi::drawOverlay() {
     ImGui::TextDisabled("Depth: reverse-Z, infinite far (compare GREATER_OR_EQUAL, clear 0.0)");
     ImGui::SliderFloat("Near plane", &camera.nearPlane, 0.01f, 5.0f);
     ImGui::DragFloat3("Origin (floating-origin offset)", &camera.origin.x, 0.1f);
+    ImGui::SliderFloat("Camera distance (dolly)", &renderer_.cameraDistance(), 1.0f, 6.0f);
+    ImGui::TextDisabled("Dolly in to shrink frustum coverage - watch drawn/instances below change.");
 
     ImGui::Separator();
     ImGui::ColorEdit3("Clear color", renderer_.clearColor());
