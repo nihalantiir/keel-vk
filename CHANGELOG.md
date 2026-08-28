@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-28
+
+Hygiene release. No new systems, no architecture changes.
+
+### Changed
+
+- `.gitignore` gains MSVC/CMake build-byproduct patterns (`*.pdb`,
+  `*.ilk`, `CMakeCache.txt`, `CMakeFiles/`, and similar) as defense in
+  depth; `build/` already covered the normal case.
+- PDB output directory set to `bin/`, next to the executables, instead of
+  wherever MSVC would otherwise scatter them.
+- `keel-vk` and `keel-vk-server` link with `/INCREMENTAL:NO` on Release,
+  so a ship build doesn't emit a `.ilk` next to the shipped exe.
+- `scripts/clean.*` also sweep stray `imgui.ini`/`pipeline_cache.bin`/
+  `*.ilk`/`pdb/` left at repo root, the common case when the exe runs
+  with the repo root as its working directory.
+- Removed `src/samples/`, an empty directory holding only a placeholder
+  README; the client executable has been the only sample since 0.1.0.
+
+### Fixed
+
+- Comments and wiki pages referencing "this landing" (a specific past
+  development session, meaningless to a reader who wasn't in it) rewritten
+  in plain, session-independent language. Two of them were also flatly
+  wrong by the time they were found: a `Renderer.h` comment claimed only
+  one instance slot is ever populated (13 are, since the 0.4.0 satellite
+  ring), and a shader comment claimed a single instance made
+  `nonuniformEXT` optional (it's required, since instances now sample
+  different bindless slots).
+- Wiki `Shaders.md` still described the pre-0.3.0 push-constant scheme
+  with no texture sampling mentioned at all. `Packages.md` pointed at a
+  `Renderer::createTexture()` that doesn't exist. `shaders/README.md`'s
+  build output path predated CMake presets.
+
 ## [0.4.0] - 2026-08-28
 
 The GPU scene stops being true only for one instance. The stock cube

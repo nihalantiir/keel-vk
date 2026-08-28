@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
             std::cout << "keel-vk: connecting to " << connectAddress << ":" << connectPort << std::endl;
         }
 
-        keel::Window window("keel-vk: working (v0.4.0)", 1280, 720);
+        keel::Window window("keel-vk: working (v0.5.0)", 1280, 720);
         keel::Vfs vfs; // mounts packages/ next to the executable
         keel::VulkanContext context(window);
         keel::Swapchain swapchain(context, window);
