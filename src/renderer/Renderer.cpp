@@ -204,12 +204,12 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
     createCommandBuffers();
     createSyncObjects();
     createTimestampPool();
-    createMeshPool();
-    createInstanceResources();
     createUploadTimelineSemaphore();
-    createTextureStreamer(); // signals uploadTimelineSemaphore_ to 1
+    createMeshPool();          // signals uploadTimelineSemaphore_ to 1 (the cube mesh's only allocate() call)
+    createInstanceResources();
+    createTextureStreamer();   // signals uploadTimelineSemaphore_ to 2
     textureArray_ =
-        std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16, uploadTimelineSemaphore_, 2);
+        std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16, uploadTimelineSemaphore_, 3);
     // "hello", 5 glyph-shaped placeholder rects: proves the shelf packer
     // and UV table without needing real glyph rendering yet.
     {
@@ -221,7 +221,7 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
             {10, 20, swatchB.data()},
             {14, 20, swatchC.data()},
         };
-        atlas_ = std::make_unique<Atlas2D>(context_, uploadCommandPool_, 256, entries, uploadTimelineSemaphore_, 3);
+        atlas_ = std::make_unique<Atlas2D>(context_, uploadCommandPool_, 256, entries, uploadTimelineSemaphore_, 4);
     }
     createResidencyDescriptorSet();
     createDepthTarget();
@@ -428,7 +428,8 @@ void Renderer::createMeshPool() {
     // one cube mesh this landing allocates, so MeshPool::allocate has real
     // room to demonstrate subrange allocation instead of exactly fitting
     // one caller.
-    meshPool_ = std::make_unique<MeshPool>(context_, 8192, 16384, sizeof(Vertex));
+    meshPool_ = std::make_unique<MeshPool>(context_, uploadCommandPool_, uploadTimelineSemaphore_, 1, 8192, 16384,
+                                            sizeof(Vertex));
     cubeMesh_ = meshPool_->allocate(kVertices.data(), static_cast<uint32_t>(kVertices.size()), kIndices.data(),
                                      static_cast<uint32_t>(kIndices.size()));
 }
@@ -541,7 +542,8 @@ void Renderer::createTextureStreamer() {
 
     // One-time startup flush: everything queued above needs to be resident
     // before the first frame draws, and there is no earlier frame's command
-    // buffer to defer to. Signals uploadTimelineSemaphore_ to value 1
+    // buffer to defer to. Signals uploadTimelineSemaphore_ to value 2
+    // (value 1 is MeshPool's cube-mesh upload, see createMeshPool)
     // instead of blocking the CPU with vkQueueWaitIdle; Renderer's first
     // drawFrame() waits for the shared timeline on the GPU side before
     // that frame's own submission runs (see needsUploadTimelineWait_).
@@ -568,7 +570,7 @@ void Renderer::createTextureStreamer() {
     cmdSubmitInfo.commandBuffer = startupTextureUploadCmd_;
     VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signalInfo.semaphore = uploadTimelineSemaphore_;
-    signalInfo.value = 1;
+    signalInfo.value = 2;
     signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submitInfo.commandBufferInfoCount = 1;
@@ -1217,12 +1219,13 @@ void Renderer::drawFrame(debug::DebugUi* debugUi) {
     waitSemaphoreInfos[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     uint32_t waitSemaphoreCount = 1;
 
-    // Retires the three construction-time texture uploads (TextureStreamer,
-    // TextureArray2D, Atlas2D - see createUploadTimelineSemaphore) on the
-    // GPU side, once, before the first frame that might sample any of
-    // them submits. Every later frame skips this: the timeline has long
-    // since reached its target value, so there is nothing left to wait on
-    // and no reason to keep naming it in the submit.
+    // Retires the four construction-time GPU uploads (MeshPool's cube
+    // mesh, TextureStreamer, TextureArray2D, Atlas2D - see
+    // createUploadTimelineSemaphore) on the GPU side, once, before the
+    // first frame that might read any of them submits. Every later frame
+    // skips this: the timeline has long since reached its target value,
+    // so there is nothing left to wait on and no reason to keep naming it
+    // in the submit.
     if (needsUploadTimelineWait_) {
         waitSemaphoreInfos[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
         waitSemaphoreInfos[1].semaphore = uploadTimelineSemaphore_;

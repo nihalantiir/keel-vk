@@ -167,14 +167,15 @@ private:
     // the per-frame path.
     VkCommandPool uploadCommandPool_ = VK_NULL_HANDLE;
 
-    // Signaled by each construction-time texture upload (TextureStreamer's
-    // startup flush: value 1; TextureArray2D: value 2; Atlas2D: value 3)
-    // instead of each one calling vkQueueWaitIdle. The first frame's
-    // graphics-queue submission waits for value 3 (see needsUploadWait_
-    // below) so none of the three can be sampled before their upload
-    // actually lands, without blocking the CPU during construction.
+    // Signaled by each construction-time GPU upload (MeshPool's cube-mesh
+    // allocate(): value 1; TextureStreamer's startup flush: value 2;
+    // TextureArray2D: value 3; Atlas2D: value 4) instead of each one
+    // calling vkQueueWaitIdle. The first frame's graphics-queue submission
+    // waits for value 4 (see needsUploadTimelineWait_ below) so none of
+    // the four can be read before its upload actually lands, without
+    // blocking the CPU during construction.
     VkSemaphore uploadTimelineSemaphore_ = VK_NULL_HANDLE;
-    static constexpr uint64_t kUploadTimelineTargetValue = 3;
+    static constexpr uint64_t kUploadTimelineTargetValue = 4;
     bool needsUploadTimelineWait_ = true;
     // Freed in ~Renderer(), not right after submission: see
     // createTextureStreamer()'s comment for why.
