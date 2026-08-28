@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- README: `Keel` heading, centered banner, badge row (License, Release,
+  CI, Platforms, C++20, Vulkan 1.3), documentation section now links the
+  wiki instead of in-tree docs.
+- Moved `docs/*.md` to the wiki (Architecture, Vulkan bootstrap, Device
+  contract, Rendering, Shaders, Libraries, Extending, Coding conventions,
+  Build, Troubleshooting, plus a rewritten Home). `docs/` no longer exists
+  in the repo.
+- Repo description and topics set on GitHub.
+
+### Added
+
+- `.github/banner.svg`: a hand-authored isometric cube, hue-distinct
+  faces, matching the actual demo's palette.
+
 ## [0.1.0] - 2026-08-28
 
 ### Added
@@ -21,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists which requirements each candidate device was missing.
   `VK_EXT_memory_budget`, calibrated timestamps, extended dynamic state
   2/3, and host query reset are enabled when present, never required. See
-  `docs/Device-contract.md`.
+  the wiki's Device contract page.
 - `src/renderer/Renderer`: a perspective, depth-tested, continuously
   rotating cube. 24-vertex indexed mesh (one buffer, uploaded once), drawn
   with `vkCmdDrawIndexedIndirect` against a one-entry indirect buffer as
@@ -47,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   debug/release/relwithdebinfo, mirroring simple-vk.
 - `.github/workflows/ci.yml`: configure + build on Windows and Linux, both
   with and without `KEEL_VK_IMGUI`.
-- `docs/Architecture.md`, `docs/Device-contract.md`, `docs/Rendering.md`,
-  `docs/Extending.md`, `docs/Libraries.md`, `docs/Coding-conventions.md`.
+- Architecture, Device contract, Rendering, Extending, Libraries, and
+  Coding conventions wiki pages.
 - `.clang-format` (LLVM base, 4-space indent, 120 columns, left-aligned
   pointers), matching simple-vk exactly.
