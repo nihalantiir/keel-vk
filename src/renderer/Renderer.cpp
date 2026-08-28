@@ -1174,8 +1174,10 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     // zeroing culled entries in place: vkCmdDrawIndexedIndirect below is
     // issued with exactly the surviving count, so a culled instance costs
     // nothing on the GPU side, not even a zero-instanceCount draw. No
-    // Hi-Z, no occlusion query - bounds-only, CPU-side, same as any other
-    // frame-to-frame state here.
+    // Hi-Z, no occlusion query - bounds-only, CPU-side. Stays CPU-side
+    // rather than a compute pass at this instance count; see the wiki's
+    // Rendering page for the decision and why.
+    const uint64_t cullStartTicks = SDL_GetPerformanceCounter();
     const Frustum frustum(viewProj);
     auto* commands = static_cast<VkDrawIndexedIndirectCommand*>(frame.indirectMapped);
     uint32_t triangleCount = 0;
@@ -1198,6 +1200,9 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
         ++drawCount;
         triangleCount += cubeMesh_.indexCount / 3;
     }
+    const uint64_t cullEndTicks = SDL_GetPerformanceCounter();
+    lastCullTimeMs_ = static_cast<float>(cullEndTicks - cullStartTicks) * 1000.0f /
+                       static_cast<float>(SDL_GetPerformanceFrequency());
     lastInstanceCount_ = writtenInstanceCount;
     lastDrawCount_ = drawCount;
     lastTriangleCount_ = triangleCount;

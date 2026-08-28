@@ -99,12 +99,16 @@ public:
 
     // GPU scene stats from the most recently recorded frame, for the
     // debug overlay. instanceCount is how many instance slots were
-    // written this frame (just the cube today); drawCount is how many of
-    // those survived CPU frustum culling and were actually issued through
-    // vkCmdDrawIndexedIndirect.
+    // written this frame; drawCount is how many of those survived CPU
+    // frustum culling and were actually issued through
+    // vkCmdDrawIndexedIndirect. cullTimeMs is CPU wall time for the cull
+    // + compaction loop only, not the whole frame - see the wiki's
+    // Rendering page for why this stays CPU-side instead of a compute
+    // pass.
     uint32_t instanceCount() const { return lastInstanceCount_; }
     uint32_t drawCount() const { return lastDrawCount_; }
     uint32_t triangleCount() const { return lastTriangleCount_; }
+    float cullTimeMs() const { return lastCullTimeMs_; }
 
     // GPU-side frame time from VK_QUERY_TYPE_TIMESTAMP, distinct from the
     // overlay's existing CPU-side ImGui::GetIO().Framerate reading. Absent
@@ -150,10 +154,11 @@ private:
     // Present (the post-barrier + vkQueuePresentKHR) bracket these from
     // drawFrame() itself, outside any command buffer.
     void recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent);
-    // Records nothing yet: reserved for GPU-driven work (frustum cull,
-    // indirect-command compaction) once there is more than one draw to
-    // cull. Kept as an explicit step now so adding that later doesn't
-    // reshuffle the pass order.
+    // Records nothing: frustum cull and indirect-command compaction stay
+    // CPU-side (recordWorldPass) rather than a compute shader here. Not a
+    // gap - a deliberate call at the current instance count, recorded on
+    // the wiki's Rendering page. Kept as an explicit step so moving the
+    // cull onto the GPU later doesn't reshuffle the pass order.
     void recordComputePass(VkCommandBuffer cmd);
     void recordOverlayPass(VkCommandBuffer cmd, debug::DebugUi* debugUi);
 
@@ -228,6 +233,7 @@ private:
     uint32_t lastInstanceCount_ = 0;
     uint32_t lastDrawCount_ = 0;
     uint32_t lastTriangleCount_ = 0;
+    float lastCullTimeMs_ = 0.0f;
 
     VkImage depthImage_ = VK_NULL_HANDLE;
     VmaAllocation depthImageAllocation_ = VK_NULL_HANDLE;

@@ -138,6 +138,7 @@ void DebugUi::drawOverlay() {
     ImGui::Separator();
     ImGui::Text("Instances: %u written, %u drawn (%u triangles)", renderer_.instanceCount(), renderer_.drawCount(),
                 renderer_.triangleCount());
+    ImGui::Text("Cull: CPU (%.3f ms)", renderer_.cullTimeMs());
 
     ImGui::Separator();
     static const char* kResidencyModes[] = {"Bindless", "Array", "Atlas"};
