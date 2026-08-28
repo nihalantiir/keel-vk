@@ -165,13 +165,16 @@ void DebugUi::drawOverlay() {
                     static_cast<double>(renderer_.deviceMemoryUsageBytes()) / (1024.0 * 1024.0),
                     static_cast<double>(renderer_.deviceMemoryBudgetBytes()) / (1024.0 * 1024.0));
     } else {
-        ImGui::Text("VRAM: %.1f / %.1f MB (estimated, VK_EXT_memory_budget not present)",
-                    static_cast<double>(renderer_.deviceMemoryUsageBytes()) / (1024.0 * 1024.0),
-                    static_cast<double>(renderer_.deviceMemoryBudgetBytes()) / (1024.0 * 1024.0));
+        ImGui::TextDisabled("VRAM: N/A (VK_EXT_memory_budget not present)");
     }
-    ImGui::Text("Demo textures resident: %llu / %llu bytes, %u evicted",
+#ifdef KEEL_VK_DEBUG
+    ImGui::Text("Demo textures resident: %llu / %llu bytes (debug cap), %u evicted",
                 static_cast<unsigned long long>(renderer_.demoResidentBytes()),
                 static_cast<unsigned long long>(renderer_.demoResidentCapBytes()), renderer_.evictionCount());
+#else
+    ImGui::Text("Demo textures resident: %llu bytes, %u evicted (debug cap inactive outside Debug builds)",
+                static_cast<unsigned long long>(renderer_.demoResidentBytes()), renderer_.evictionCount());
+#endif
     ImGui::SliderInt("Cube texture slot", &renderer_.activeDemoTextureIndex(), 0, renderer_.demoTextureCount() - 1,
                       "demo slot %d");
     if (ImGui::Button("Regenerate active (streamed update)")) {

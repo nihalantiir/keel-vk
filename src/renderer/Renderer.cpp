@@ -777,7 +777,31 @@ VkDeviceSize Renderer::demoResidentBytes() const {
 }
 
 void Renderer::maybeEvictDemoTexture() {
-    if (demoResidentBytes() <= kDemoResidentCapBytes || demoTextures_.empty()) {
+    if (demoTextures_.empty()) {
+        return;
+    }
+
+    bool shouldEvict = false;
+#ifdef KEEL_VK_DEBUG
+    // Debug-only: an artificially tiny cap so eviction is something a
+    // developer can actually trigger and watch happen without first
+    // filling gigabytes of real VRAM. Never active outside a Debug
+    // build - see the wiki's Rendering page for why 2048 is deliberately
+    // unrelated to any real budget number.
+    shouldEvict = demoResidentBytes() > kDemoResidentCapBytes;
+#endif
+    if (!shouldEvict && memoryBudgetSupported()) {
+        // The real trigger, gated on VK_EXT_memory_budget actually being
+        // present: eviction only fires here if this demo's few kilobytes
+        // of content somehow pushed a real device at or over its real
+        // budget, which never happens at this content's scale - this
+        // path exists to be correct if it ever did, not to be visibly
+        // exercised by this contract test. Without the extension there
+        // is no real number to trigger on, so nothing here pretends
+        // there is (see the overlay's "VRAM: N/A" line).
+        shouldEvict = deviceMemoryUsageBytes() >= deviceMemoryBudgetBytes();
+    }
+    if (!shouldEvict) {
         return;
     }
 
