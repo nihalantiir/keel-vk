@@ -5,6 +5,86 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-28
+
+Corrects how this repo positions itself: Keel is a template for a custom
+Vulkan game engine built on [simple-vk](https://github.com/nihalantiir/simple-vk)'s
+boilerplate, not a successor that surpasses or replaces it, and the stock
+cube executable is a contract test, not the product. That correction
+lands first, in the README and wiki; the rest of this release is the
+renderer growing the plumbing a real game built on this template would
+need immediately - an explicit frame/camera layer, a GPU-driven scene
+instead of one hardcoded draw, one handle across all three texture-
+residency paths, and a fixed-timestep sim instead of a free-running
+rotation.
+
+### Changed
+
+- **Positioning**: README and wiki rewritten so "built on simple-vk,
+  template not successor, stock cube is a contract test" is the first
+  thing a reader sees. Stack split into "inherited from simple-vk" vs
+  "what Keel adds"; the project tree relabels `src/keel-vk` as the
+  boilerplate layer, never "the engine". GitHub repo description updated
+  to match.
+- **Reverse-Z depth**: compare op `GREATER_OR_EQUAL`, depth clears to
+  `0.0`, and `frame::Camera::projection()` builds an infinite-far
+  projection matrix instead of `glm::perspective`'s finite far plane -
+  more uniform depth precision across the visible range, no far-plane
+  clip. See the wiki's Rendering page for the derivation.
+- **Push constants shrink**: the model matrix and texture index moved out
+  of the per-draw push constant block into per-instance GPU data (see
+  below); push constants now carry only what's the same across an entire
+  draw (camera view-proj, time, phase speed).
+- CMake project version (and the window/console title both executables
+  print) bumped to 0.3.0.
+
+### Added
+
+- **`frame::Camera`** (`src/frame/Camera.h`): view/proj as a function of
+  plain position/front/up/lens data, not a hardcoded `lookAt`/`perspective`
+  buried in the render loop. Carries a floating-origin offset, subtracted
+  from both the camera's eye point and every world-space model matrix
+  before either reaches the GPU - the scaffold a space sim or a large
+  open world needs to keep GPU-side coordinates small regardless of how
+  far from `(0,0,0)` the world actually extends.
+- **An explicit frame pass list**: `Renderer::recordCommandBuffer` now
+  calls out to five named steps in order (Acquire, World, Compute,
+  Overlay, Present) instead of one long function body. Not a
+  frame-graph - no automatic barrier derivation or resource-dependency
+  tracking, just a readable, fixed sequence. Compute is a documented
+  no-op today, reserved for GPU-driven culling work once there's more
+  than one draw to cull.
+- **A GPU scene**: `MeshPool` (one vertex buffer, one index buffer,
+  subrange-allocated, capacity for far more than the one cube mesh it
+  currently holds), a per-frame-in-flight instance buffer (capacity 256,
+  only the cube populated), and a CPU frustum cull (`Frustum`, five
+  Vulkan-clip-space half-planes, no far plane to match the infinite-far
+  projection) that compacts surviving instances into that frame's
+  indirect buffer before `vkCmdDrawIndexedIndirect`. The debug overlay
+  reports instances written, draws issued, and triangles drawn.
+- **Unified texture residency**: `renderer::TextureRef` is the one handle
+  type a material or instance names a texture with, whether it actually
+  lives in the bindless streaming array, the texture array, or the atlas
+  page - the three storage classes themselves are unchanged. The debug
+  overlay's new "Residency mode" control switches which path the cube
+  samples live, so all three are visibly proven working, not just
+  constructed and left unbound like before this release.
+- **The cube's rotation moved onto `shared::FixedClock`**: previously
+  present but unused, `FixedClock` now actually drives a fixed-timestep
+  simulation of the cube's `Transform`, with a spiral-of-death cap on the
+  accumulator and render-side interpolation between the last two
+  simulated states so motion stays smooth at a frame rate that doesn't
+  divide evenly into the fixed step. Pausing (Space) now freezes sim time
+  directly; rendering keeps running either way.
+
+### Fixed
+
+- The three construction-time texture uploads (the bindless streamer's
+  startup flush, the texture array, the atlas) no longer call
+  `vkQueueWaitIdle`. A shared timeline semaphore retires all three on the
+  GPU side, once, before the first frame that could sample any of them -
+  the CPU never blocks on them at all now, at construction or otherwise.
+
 ## [0.2.0] - 2026-08-28
 
 The cube gains an entity behind it, a texture, three ways to store
