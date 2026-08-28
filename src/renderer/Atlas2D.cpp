@@ -11,7 +11,7 @@
 namespace renderer {
 
 Atlas2D::Atlas2D(keel::VulkanContext& context, VkCommandPool commandPool, uint32_t pageSize,
-                  const std::vector<AtlasEntry>& entries)
+                  const std::vector<AtlasEntry>& entries, VkSemaphore timelineSemaphore, uint64_t signalValue)
     : context_(context), pageSize_(pageSize) {
     // Composited into one CPU-side page buffer first (simpler than per-rect
     // VkBufferImageCopy regions with row-pitch bookkeeping), then uploaded
@@ -161,16 +161,28 @@ Atlas2D::Atlas2D(keel::VulkanContext& context, VkCommandPool commandPool, uint32
 
     keel::vkCheck(vkEndCommandBuffer(cmd), "Failed to end atlas upload command buffer");
 
+    // Signals timelineSemaphore instead of vkQueueWaitIdle; see
+    // TextureArray2D.cpp's matching comment. No CPU wait means the
+    // staging/command buffers move into member variables below instead of
+    // being destroyed here.
     VkCommandBufferSubmitInfo cmdSubmitInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     cmdSubmitInfo.commandBuffer = cmd;
+    VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signalInfo.semaphore = timelineSemaphore;
+    signalInfo.value = signalValue;
+    signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
+    submitInfo.signalSemaphoreInfoCount = 1;
+    submitInfo.pSignalSemaphoreInfos = &signalInfo;
     keel::vkCheck(vkQueueSubmit2(context_.uploadQueue(), 1, &submitInfo, VK_NULL_HANDLE),
                   "Failed to submit atlas upload");
-    keel::vkCheck(vkQueueWaitIdle(context_.uploadQueue()), "Failed to wait for atlas upload");
-    vkFreeCommandBuffers(context_.device(), commandPool, 1, &cmd);
-    vmaDestroyBuffer(context_.allocator(), stagingBuffer, stagingAllocation);
+
+    uploadCommandPool_ = commandPool;
+    uploadCommandBuffer_ = cmd;
+    stagingBuffer_ = stagingBuffer;
+    stagingAllocation_ = stagingAllocation;
 
     VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = image_;
@@ -191,6 +203,14 @@ Atlas2D::Atlas2D(keel::VulkanContext& context, VkCommandPool commandPool, uint32
 }
 
 Atlas2D::~Atlas2D() {
+    // Only reached after ~Renderer's vkDeviceWaitIdle; see
+    // TextureArray2D.cpp's matching destructor comment.
+    if (uploadCommandBuffer_ != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(context_.device(), uploadCommandPool_, 1, &uploadCommandBuffer_);
+    }
+    if (stagingBuffer_ != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(context_.allocator(), stagingBuffer_, stagingAllocation_);
+    }
     if (sampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(context_.device(), sampler_, nullptr);
     }

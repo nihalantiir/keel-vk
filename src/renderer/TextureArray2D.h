@@ -21,7 +21,13 @@ namespace renderer {
 // yet, it exists to prove the path works.
 class TextureArray2D {
 public:
-    TextureArray2D(keel::VulkanContext& context, VkCommandPool commandPool, uint32_t tileSize, uint32_t layerCount);
+    // timelineSemaphore/signalValue: the construction upload signals this
+    // timeline semaphore to signalValue on completion instead of blocking
+    // the CPU with vkQueueWaitIdle. Caller (Renderer) waits for the target
+    // value once, before the first frame that might sample this image, on
+    // the GPU side. See the wiki's Rendering page.
+    TextureArray2D(keel::VulkanContext& context, VkCommandPool commandPool, uint32_t tileSize, uint32_t layerCount,
+                    VkSemaphore timelineSemaphore, uint64_t signalValue);
     ~TextureArray2D();
 
     TextureArray2D(const TextureArray2D&) = delete;
@@ -40,6 +46,15 @@ private:
     VkSampler sampler_ = VK_NULL_HANDLE;
     uint32_t tileSize_;
     uint32_t layerCount_;
+
+    // Construction upload is fire-and-forget (no CPU wait, see the
+    // constructor): the staging buffer and its one-shot command buffer
+    // stay alive until the destructor, which only ever runs after
+    // ~Renderer's vkDeviceWaitIdle already guarantees the GPU is done.
+    VkCommandPool uploadCommandPool_ = VK_NULL_HANDLE;
+    VkCommandBuffer uploadCommandBuffer_ = VK_NULL_HANDLE;
+    VkBuffer stagingBuffer_ = VK_NULL_HANDLE;
+    VmaAllocation stagingAllocation_ = VK_NULL_HANDLE;
 };
 
 } // namespace renderer

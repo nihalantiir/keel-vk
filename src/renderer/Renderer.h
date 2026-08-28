@@ -9,6 +9,7 @@
 #include "../frame/Camera.h"
 #include "Atlas2D.h"
 #include "MeshPool.h"
+#include "TextureRef.h"
 #include "TextureStreamer.h"
 
 #include <array>
@@ -84,6 +85,13 @@ public:
     uint32_t textureArrayLayerCount() const;
     uint32_t atlasRectCount() const;
 
+    // Which residency path the cube's instance names this frame. All
+    // three are visibly sampled by switching this, not just constructed -
+    // see the wiki's Rendering page.
+    TextureKind& residencyMode() { return demoResidencyKind_; }
+    int& demoArrayLayer() { return demoArrayLayer_; }
+    int& demoAtlasRectIndex() { return demoAtlasRectIndex_; }
+
     // GPU scene stats from the most recently recorded frame, for the
     // debug overlay. instanceCount is how many instance slots were
     // written this frame (just the cube today); drawCount is how many of
@@ -119,7 +127,9 @@ private:
     void createMeshPool();
     void createInstanceResources();
     void destroyInstanceResources();
+    void createUploadTimelineSemaphore();
     void createTextureStreamer();
+    void createResidencyDescriptorSet();
     void createTimestampPool();
     void createDepthTarget();
     void destroyDepthTarget();
@@ -156,6 +166,19 @@ private:
     // texture streamer's startup flush, the array, the atlas); never on
     // the per-frame path.
     VkCommandPool uploadCommandPool_ = VK_NULL_HANDLE;
+
+    // Signaled by each construction-time texture upload (TextureStreamer's
+    // startup flush: value 1; TextureArray2D: value 2; Atlas2D: value 3)
+    // instead of each one calling vkQueueWaitIdle. The first frame's
+    // graphics-queue submission waits for value 3 (see needsUploadWait_
+    // below) so none of the three can be sampled before their upload
+    // actually lands, without blocking the CPU during construction.
+    VkSemaphore uploadTimelineSemaphore_ = VK_NULL_HANDLE;
+    static constexpr uint64_t kUploadTimelineTargetValue = 3;
+    bool needsUploadTimelineWait_ = true;
+    // Freed in ~Renderer(), not right after submission: see
+    // createTextureStreamer()'s comment for why.
+    VkCommandBuffer startupTextureUploadCmd_ = VK_NULL_HANDLE;
 
     std::vector<VkSemaphore> imageAvailableSemaphores_; // one per frame in flight
     std::vector<VkSemaphore> renderFinishedSemaphores_; // one per swapchain image
@@ -213,11 +236,22 @@ private:
     int activeDemoTextureIndex_ = 0;
     uint32_t regenerateCounter_ = 0;
 
-    // Constructed, populated, and correctly left unbound to any shader
-    // this landing (see Renderer.cpp's createTextureStreamer): both exist
-    // to prove the path, not because the cube samples them.
+    // Populated once at construction. Both are visibly sampled by the
+    // cube now (see residencyMode() above and the wiki's Rendering page),
+    // not just constructed to prove the path.
     std::unique_ptr<TextureArray2D> textureArray_;
     std::unique_ptr<Atlas2D> atlas_;
+
+    // set 2: the array/atlas samplers, written once (both are populated
+    // once at construction, never streamed). set 0 (bindless) is
+    // TextureStreamer's own; set 1 is the per-frame instance SSBO.
+    VkDescriptorSetLayout residencySetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool residencyDescriptorPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet residencySet_ = VK_NULL_HANDLE;
+
+    TextureKind demoResidencyKind_ = TextureKind::Bindless;
+    int demoArrayLayer_ = 3;
+    int demoAtlasRectIndex_ = 0;
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

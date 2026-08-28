@@ -6,7 +6,9 @@ layout(location = 2) in vec2 inUv;
 
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec2 fragUv;
-layout(location = 2) flat out uint fragTextureIndex;
+layout(location = 2) flat out uint fragTextureKind;
+layout(location = 3) flat out uint fragTextureIndex;
+layout(location = 4) flat out vec4 fragAtlasUvRect;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
@@ -16,14 +18,18 @@ layout(push_constant) uniform PushConstants {
 
 // Matches renderer::GpuInstance (Renderer.cpp) field for field. scalarBlockLayout
 // (required device contract) makes std430's usual vec3/vec4 padding rules moot
-// here, but the layout is written to match exactly either way.
+// here, but the layout is written to match exactly either way. textureKind:
+// 0 = bindless (textureIndex is a TextureStreamer slot), 1 = array
+// (textureIndex is a TextureArray2D layer), 2 = atlas (atlasUvRect names the
+// packed rect, textureIndex unused). See src/renderer/TextureRef.h.
 struct Instance {
     mat4 model;
     vec4 boundsCenterRadius;
+    vec4 atlasUvRect;
+    uint textureKind;
     uint textureIndex;
     uint visible;
     uint generation;
-    uint _pad0;
 };
 
 layout(set = 1, binding = 0, std430) readonly buffer InstanceBuffer {
@@ -56,5 +62,7 @@ void main() {
     gl_Position = pc.viewProj * inst.model * vec4(inPosition, 1.0);
     fragColor = hsv2rgb(inBaseHue + pc.time * pc.phaseSpeed, 0.75, 1.0);
     fragUv = inUv;
+    fragTextureKind = inst.textureKind;
     fragTextureIndex = inst.textureIndex;
+    fragAtlasUvRect = inst.atlasUvRect;
 }

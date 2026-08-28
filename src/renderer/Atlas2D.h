@@ -33,8 +33,10 @@ struct AtlasRect {
 // queued streaming path TextureStreamer uses).
 class Atlas2D {
 public:
+    // timelineSemaphore/signalValue: see TextureArray2D's constructor
+    // comment - same non-blocking construction-upload pattern.
     Atlas2D(keel::VulkanContext& context, VkCommandPool commandPool, uint32_t pageSize,
-            const std::vector<AtlasEntry>& entries);
+            const std::vector<AtlasEntry>& entries, VkSemaphore timelineSemaphore, uint64_t signalValue);
     ~Atlas2D();
 
     Atlas2D(const Atlas2D&) = delete;
@@ -53,6 +55,13 @@ private:
     VkSampler sampler_ = VK_NULL_HANDLE;
     uint32_t pageSize_;
     std::vector<AtlasRect> rects_;
+
+    // Construction upload is fire-and-forget; see TextureArray2D.h's
+    // matching members for why these stay alive until the destructor.
+    VkCommandPool uploadCommandPool_ = VK_NULL_HANDLE;
+    VkCommandBuffer uploadCommandBuffer_ = VK_NULL_HANDLE;
+    VkBuffer stagingBuffer_ = VK_NULL_HANDLE;
+    VmaAllocation stagingAllocation_ = VK_NULL_HANDLE;
 };
 
 } // namespace renderer

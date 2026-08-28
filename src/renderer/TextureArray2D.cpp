@@ -32,7 +32,7 @@ void fillLayerColor(uint8_t* dst, uint32_t tileSize, uint32_t layerIndex) {
 } // namespace
 
 TextureArray2D::TextureArray2D(keel::VulkanContext& context, VkCommandPool commandPool, uint32_t tileSize,
-                                uint32_t layerCount)
+                                uint32_t layerCount, VkSemaphore timelineSemaphore, uint64_t signalValue)
     : context_(context), tileSize_(tileSize), layerCount_(layerCount) {
     const VkDeviceSize layerBytes = static_cast<VkDeviceSize>(tileSize_) * tileSize_ * 4;
     std::vector<uint8_t> pixels(static_cast<size_t>(layerBytes) * layerCount_);
@@ -148,16 +148,32 @@ TextureArray2D::TextureArray2D(keel::VulkanContext& context, VkCommandPool comma
 
     keel::vkCheck(vkEndCommandBuffer(cmd), "Failed to end texture array upload command buffer");
 
+    // Signals timelineSemaphore to signalValue instead of vkQueueWaitIdle:
+    // Renderer waits for the shared upload timeline once, on the GPU side,
+    // before the first frame that might sample any of the three
+    // construction-time texture uploads - see the wiki's Rendering page.
+    // No CPU wait here means the staging buffer and command buffer aren't
+    // safe to destroy yet: they're kept as members and freed in the
+    // destructor instead, which only ever runs after ~Renderer's
+    // vkDeviceWaitIdle has already guaranteed the GPU is idle.
     VkCommandBufferSubmitInfo cmdSubmitInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     cmdSubmitInfo.commandBuffer = cmd;
+    VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signalInfo.semaphore = timelineSemaphore;
+    signalInfo.value = signalValue;
+    signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
+    submitInfo.signalSemaphoreInfoCount = 1;
+    submitInfo.pSignalSemaphoreInfos = &signalInfo;
     keel::vkCheck(vkQueueSubmit2(context_.uploadQueue(), 1, &submitInfo, VK_NULL_HANDLE),
                   "Failed to submit texture array upload");
-    keel::vkCheck(vkQueueWaitIdle(context_.uploadQueue()), "Failed to wait for texture array upload");
-    vkFreeCommandBuffers(context_.device(), commandPool, 1, &cmd);
-    vmaDestroyBuffer(context_.allocator(), stagingBuffer, stagingAllocation);
+
+    uploadCommandPool_ = commandPool;
+    uploadCommandBuffer_ = cmd;
+    stagingBuffer_ = stagingBuffer;
+    stagingAllocation_ = stagingAllocation;
 
     VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = image_;
@@ -179,6 +195,15 @@ TextureArray2D::TextureArray2D(keel::VulkanContext& context, VkCommandPool comma
 }
 
 TextureArray2D::~TextureArray2D() {
+    // Only reached after ~Renderer's vkDeviceWaitIdle, so the construction
+    // upload this class fired off without waiting on it is long since
+    // complete by now - safe to free unconditionally.
+    if (uploadCommandBuffer_ != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(context_.device(), uploadCommandPool_, 1, &uploadCommandBuffer_);
+    }
+    if (stagingBuffer_ != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(context_.allocator(), stagingBuffer_, stagingAllocation_);
+    }
     if (sampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(context_.device(), sampler_, nullptr);
     }

@@ -89,17 +89,20 @@ struct PushConstants {
     float phaseSpeed;
 };
 
-// mat4 (64) + vec4 (16) + 4 x uint32 (16) = 96 bytes, matching cube.vert's
-// std430 Instance struct field for field. scalarBlockLayout is part of
-// the required device contract, but this still keeps natural 16-byte
-// alignment throughout rather than relying on it.
+// mat4 (64) + vec4 (16) + vec4 (16) + 4 x uint32 (16) = 112 bytes,
+// matching cube.vert's std430 Instance struct field for field.
+// scalarBlockLayout is part of the required device contract, but this
+// still keeps natural 16-byte alignment throughout rather than relying
+// on it. textureKind selects which of the three residency paths
+// textureIndex/atlasUvRect should be read as - see TextureRef.h.
 struct GpuInstance {
     glm::mat4 model;
     glm::vec4 boundsCenterRadius;
+    glm::vec4 atlasUvRect;
+    uint32_t textureKind;
     uint32_t textureIndex;
     uint32_t visible;
     uint32_t generation;
-    uint32_t _pad0;
 };
 
 // Local-space bounding sphere radius for the 1x1x1 cube (half-extent 0.5
@@ -203,8 +206,10 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
     createTimestampPool();
     createMeshPool();
     createInstanceResources();
-    createTextureStreamer();
-    textureArray_ = std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16);
+    createUploadTimelineSemaphore();
+    createTextureStreamer(); // signals uploadTimelineSemaphore_ to 1
+    textureArray_ =
+        std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16, uploadTimelineSemaphore_, 2);
     // "hello", 5 glyph-shaped placeholder rects: proves the shelf packer
     // and UV table without needing real glyph rendering yet.
     {
@@ -216,8 +221,9 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
             {10, 20, swatchB.data()},
             {14, 20, swatchC.data()},
         };
-        atlas_ = std::make_unique<Atlas2D>(context_, uploadCommandPool_, 256, entries);
+        atlas_ = std::make_unique<Atlas2D>(context_, uploadCommandPool_, 256, entries, uploadTimelineSemaphore_, 3);
     }
+    createResidencyDescriptorSet();
     createDepthTarget();
     createPipeline();
 }
@@ -241,6 +247,12 @@ Renderer::~Renderer() {
     }
 
     destroyDepthTarget();
+    if (residencyDescriptorPool_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(context_.device(), residencyDescriptorPool_, nullptr); // also frees residencySet_
+    }
+    if (residencySetLayout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(context_.device(), residencySetLayout_, nullptr);
+    }
     atlas_.reset();
     textureArray_.reset();
     textureStreamer_.reset();
@@ -249,6 +261,12 @@ Renderer::~Renderer() {
     meshPool_.reset();
 
     destroySyncObjects();
+    if (startupTextureUploadCmd_ != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(context_.device(), uploadCommandPool_, 1, &startupTextureUploadCmd_);
+    }
+    if (uploadTimelineSemaphore_ != VK_NULL_HANDLE) {
+        vkDestroySemaphore(context_.device(), uploadTimelineSemaphore_, nullptr);
+    }
     if (uploadCommandPool_ != VK_NULL_HANDLE) {
         vkDestroyCommandPool(context_.device(), uploadCommandPool_, nullptr);
     }
@@ -488,6 +506,19 @@ void Renderer::destroyInstanceResources() {
     }
 }
 
+void Renderer::createUploadTimelineSemaphore() {
+    VkSemaphoreTypeCreateInfo typeInfo{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+    typeInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    typeInfo.initialValue = 0;
+
+    VkSemaphoreCreateInfo semaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    semaphoreInfo.pNext = &typeInfo;
+    keel::vkCheck(vkCreateSemaphore(context_.device(), &semaphoreInfo, nullptr, &uploadTimelineSemaphore_),
+                  "Failed to create upload timeline semaphore");
+    keel::setDebugObjectName(context_.device(), VK_OBJECT_TYPE_SEMAPHORE,
+                              reinterpret_cast<uint64_t>(uploadTimelineSemaphore_), "upload timeline semaphore");
+}
+
 void Renderer::createTextureStreamer() {
     textureStreamer_ = std::make_unique<TextureStreamer>(context_, commandPool_, kMaxBindlessTextures,
                                                            kFramesInFlight);
@@ -510,35 +541,104 @@ void Renderer::createTextureStreamer() {
 
     // One-time startup flush: everything queued above needs to be resident
     // before the first frame draws, and there is no earlier frame's command
-    // buffer to defer to. This is the only wait-idle anywhere in the
-    // texture path; every later allocate()/update()/free() during the
-    // running app is drained by processUploads() inside the normal
-    // per-frame command buffer instead (see recordCommandBuffer). Runs on
-    // the dedicated transfer queue if the device has one, the graphics
-    // queue otherwise (see VulkanContext::uploadQueue()).
+    // buffer to defer to. Signals uploadTimelineSemaphore_ to value 1
+    // instead of blocking the CPU with vkQueueWaitIdle; Renderer's first
+    // drawFrame() waits for the shared timeline on the GPU side before
+    // that frame's own submission runs (see needsUploadTimelineWait_).
+    // Every later allocate()/update()/free() during the running app is
+    // still drained by processUploads() inside the normal per-frame
+    // command buffer instead (see recordCommandBuffer). Runs on the
+    // dedicated transfer queue if the device has one, the graphics queue
+    // otherwise (see VulkanContext::uploadQueue()).
     VkCommandBufferAllocateInfo cmdAllocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     cmdAllocInfo.commandPool = uploadCommandPool_;
     cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAllocInfo.commandBufferCount = 1;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    keel::vkCheck(vkAllocateCommandBuffers(context_.device(), &cmdAllocInfo, &cmd),
+    keel::vkCheck(vkAllocateCommandBuffers(context_.device(), &cmdAllocInfo, &startupTextureUploadCmd_),
                   "Failed to allocate startup texture upload command buffer");
 
     VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    keel::vkCheck(vkBeginCommandBuffer(cmd, &beginInfo), "Failed to begin startup texture upload command buffer");
-    textureStreamer_->processUploads(cmd);
-    keel::vkCheck(vkEndCommandBuffer(cmd), "Failed to end startup texture upload command buffer");
+    keel::vkCheck(vkBeginCommandBuffer(startupTextureUploadCmd_, &beginInfo),
+                  "Failed to begin startup texture upload command buffer");
+    textureStreamer_->processUploads(startupTextureUploadCmd_);
+    keel::vkCheck(vkEndCommandBuffer(startupTextureUploadCmd_), "Failed to end startup texture upload command buffer");
 
     VkCommandBufferSubmitInfo cmdSubmitInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    cmdSubmitInfo.commandBuffer = cmd;
+    cmdSubmitInfo.commandBuffer = startupTextureUploadCmd_;
+    VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signalInfo.semaphore = uploadTimelineSemaphore_;
+    signalInfo.value = 1;
+    signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
+    submitInfo.signalSemaphoreInfoCount = 1;
+    submitInfo.pSignalSemaphoreInfos = &signalInfo;
     keel::vkCheck(vkQueueSubmit2(context_.uploadQueue(), 1, &submitInfo, VK_NULL_HANDLE),
                   "Failed to submit startup texture upload");
-    keel::vkCheck(vkQueueWaitIdle(context_.uploadQueue()), "Failed to wait for startup texture upload");
-    vkFreeCommandBuffers(context_.device(), uploadCommandPool_, 1, &cmd);
+    // startupTextureUploadCmd_ is freed in ~Renderer(), after
+    // vkDeviceWaitIdle guarantees this submission has long since completed.
+}
+
+void Renderer::createResidencyDescriptorSet() {
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = static_cast<uint32_t>(std::size(bindings));
+    layoutInfo.pBindings = bindings;
+    keel::vkCheck(vkCreateDescriptorSetLayout(context_.device(), &layoutInfo, nullptr, &residencySetLayout_),
+                  "Failed to create residency descriptor set layout");
+
+    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    keel::vkCheck(vkCreateDescriptorPool(context_.device(), &poolInfo, nullptr, &residencyDescriptorPool_),
+                  "Failed to create residency descriptor pool");
+
+    VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocInfo.descriptorPool = residencyDescriptorPool_;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &residencySetLayout_;
+    keel::vkCheck(vkAllocateDescriptorSets(context_.device(), &allocInfo, &residencySet_),
+                  "Failed to allocate residency descriptor set");
+
+    // Written once: both images are populated once at construction, never
+    // streamed, so there's nothing to update after this.
+    VkDescriptorImageInfo arrayImageInfo{};
+    arrayImageInfo.sampler = textureArray_->sampler();
+    arrayImageInfo.imageView = textureArray_->view();
+    arrayImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkDescriptorImageInfo atlasImageInfo{};
+    atlasImageInfo.sampler = atlas_->sampler();
+    atlasImageInfo.imageView = atlas_->view();
+    atlasImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = residencySet_;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &arrayImageInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = residencySet_;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo = &atlasImageInfo;
+    vkUpdateDescriptorSets(context_.device(), static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
 }
 
 void Renderer::regenerateActiveTexture() {
@@ -771,9 +871,10 @@ void Renderer::createPipeline() {
 
     // set 0: the bindless texture array (TextureStreamer). set 1: the
     // per-instance SSBO, one descriptor set per frame in flight, bound at
-    // draw time in recordWorldPass.
+    // draw time in recordWorldPass. set 2: the array/atlas samplers
+    // (createResidencyDescriptorSet), written once.
     const VkDescriptorSetLayout bindlessSetLayout = textureStreamer_->descriptorSetLayout();
-    const VkDescriptorSetLayout setLayouts[] = {bindlessSetLayout, instanceSetLayout_};
+    const VkDescriptorSetLayout setLayouts[] = {bindlessSetLayout, instanceSetLayout_, residencySetLayout_};
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.setLayoutCount = static_cast<uint32_t>(std::size(setLayouts));
     layoutInfo.pSetLayouts = setLayouts;
@@ -963,7 +1064,33 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     auto* instances = static_cast<GpuInstance*>(frame.instanceMapped);
     instances[0].model = originAdjustedModel;
     instances[0].boundsCenterRadius = glm::vec4(glm::vec3(originAdjustedModel[3]), kCubeBoundsRadius);
-    instances[0].textureIndex = activeSlot;
+    // Which of the three residency paths this instance samples, picked by
+    // the debug overlay's "Residency mode" control - visible proof all
+    // three actually work, not just constructed. See TextureRef.h.
+    instances[0].textureKind = static_cast<uint32_t>(demoResidencyKind_);
+    switch (demoResidencyKind_) {
+        case TextureKind::Array: {
+            const uint32_t layerCount = textureArray_->layerCount();
+            const uint32_t layer =
+                layerCount == 0 ? 0 : static_cast<uint32_t>(demoArrayLayer_) % layerCount;
+            instances[0].textureIndex = layer;
+            instances[0].atlasUvRect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+            break;
+        }
+        case TextureKind::Atlas: {
+            const std::vector<AtlasRect>& rects = atlas_->rects();
+            const AtlasRect& rect =
+                rects.empty() ? AtlasRect{} : rects[static_cast<size_t>(demoAtlasRectIndex_) % rects.size()];
+            instances[0].textureIndex = 0;
+            instances[0].atlasUvRect = glm::vec4(rect.u0, rect.v0, rect.u1, rect.v1);
+            break;
+        }
+        case TextureKind::Bindless:
+        default:
+            instances[0].textureIndex = activeSlot;
+            instances[0].atlasUvRect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+            break;
+    }
     instances[0].visible = 1;
     instances[0].generation = 0;
     const uint32_t writtenInstanceCount = 1;
@@ -1001,7 +1128,7 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     lastDrawCount_ = drawCount;
     lastTriangleCount_ = triangleCount;
 
-    const VkDescriptorSet sets[] = {textureStreamer_->descriptorSet(), frame.instanceSet};
+    const VkDescriptorSet sets[] = {textureStreamer_->descriptorSet(), frame.instanceSet, residencySet_};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0,
                              static_cast<uint32_t>(std::size(sets)), sets, 0, nullptr);
 
@@ -1084,9 +1211,26 @@ void Renderer::drawFrame(debug::DebugUi* debugUi) {
     vkResetCommandBuffer(commandBuffers_[currentFrame_], 0);
     recordCommandBuffer(commandBuffers_[currentFrame_], imageIndex, debugUi);
 
-    VkSemaphoreSubmitInfo waitSemaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    waitSemaphoreInfo.semaphore = imageAvailableSemaphores_[currentFrame_];
-    waitSemaphoreInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSemaphoreSubmitInfo waitSemaphoreInfos[2]{};
+    waitSemaphoreInfos[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    waitSemaphoreInfos[0].semaphore = imageAvailableSemaphores_[currentFrame_];
+    waitSemaphoreInfos[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    uint32_t waitSemaphoreCount = 1;
+
+    // Retires the three construction-time texture uploads (TextureStreamer,
+    // TextureArray2D, Atlas2D - see createUploadTimelineSemaphore) on the
+    // GPU side, once, before the first frame that might sample any of
+    // them submits. Every later frame skips this: the timeline has long
+    // since reached its target value, so there is nothing left to wait on
+    // and no reason to keep naming it in the submit.
+    if (needsUploadTimelineWait_) {
+        waitSemaphoreInfos[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        waitSemaphoreInfos[1].semaphore = uploadTimelineSemaphore_;
+        waitSemaphoreInfos[1].value = kUploadTimelineTargetValue;
+        waitSemaphoreInfos[1].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        waitSemaphoreCount = 2;
+        needsUploadTimelineWait_ = false;
+    }
 
     VkSemaphoreSubmitInfo signalSemaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signalSemaphoreInfo.semaphore = renderFinishedSemaphores_[imageIndex];
@@ -1096,8 +1240,8 @@ void Renderer::drawFrame(debug::DebugUi* debugUi) {
     commandBufferInfo.commandBuffer = commandBuffers_[currentFrame_];
 
     VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    submitInfo.waitSemaphoreInfoCount = 1;
-    submitInfo.pWaitSemaphoreInfos = &waitSemaphoreInfo;
+    submitInfo.waitSemaphoreInfoCount = waitSemaphoreCount;
+    submitInfo.pWaitSemaphoreInfos = waitSemaphoreInfos;
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &commandBufferInfo;
     submitInfo.signalSemaphoreInfoCount = 1;

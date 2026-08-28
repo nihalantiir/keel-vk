@@ -11,6 +11,8 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
 
+#include <cstddef>
+#include <iterator>
 #include <stdexcept>
 
 namespace debug {
@@ -136,6 +138,14 @@ void DebugUi::drawOverlay() {
                 renderer_.triangleCount());
 
     ImGui::Separator();
+    static const char* kResidencyModes[] = {"Bindless", "Array", "Atlas"};
+    int residencyModeIndex = static_cast<int>(renderer_.residencyMode());
+    if (ImGui::Combo("Residency mode", &residencyModeIndex, kResidencyModes,
+                      static_cast<int>(std::size(kResidencyModes)))) {
+        renderer_.residencyMode() = static_cast<renderer::TextureKind>(residencyModeIndex);
+    }
+    ImGui::TextDisabled("The cube samples whichever path is selected above - all three are live, not just built.");
+
     ImGui::Text("Bindless textures: %u / %u slots used", renderer_.boundTextureCount(),
                 renderer::Renderer::kMaxBindlessTextures);
     ImGui::SliderInt("Cube texture slot", &renderer_.activeDemoTextureIndex(), 0, renderer_.demoTextureCount() - 1,
@@ -147,7 +157,15 @@ void DebugUi::drawOverlay() {
         renderer_.freeAndReallocateSpareTexture();
     }
     ImGui::Text("Texture array: %u layers", renderer_.textureArrayLayerCount());
+    if (renderer_.textureArrayLayerCount() > 0) {
+        ImGui::SliderInt("Array layer", &renderer_.demoArrayLayer(), 0,
+                          static_cast<int>(renderer_.textureArrayLayerCount()) - 1);
+    }
     ImGui::Text("Atlas: %u rects packed", renderer_.atlasRectCount());
+    if (renderer_.atlasRectCount() > 0) {
+        ImGui::SliderInt("Atlas rect", &renderer_.demoAtlasRectIndex(), 0,
+                          static_cast<int>(renderer_.atlasRectCount()) - 1);
+    }
 
     ImGui::Separator();
     ImGui::Checkbox("Show ImGui demo window", &showDemoWindow_);
