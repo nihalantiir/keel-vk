@@ -6,6 +6,7 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
+#include "../frame/Camera.h"
 #include "Atlas2D.h"
 #include "TextureStreamer.h"
 
@@ -58,6 +59,12 @@ public:
     // first call.
     void setModel(const glm::mat4& model) { model_ = model; }
 
+    // View/proj source and floating-origin state. Position/front/up are
+    // fixed for the stock cube (no input-driven controller yet, see the
+    // wiki's Extending page); live-editable by the debug overlay
+    // (origin, near plane) to prove the plumbing without needing input.
+    frame::Camera& camera() { return camera_; }
+
     // Read-only: the front face's current hue-cycled color, for the overlay.
     glm::vec3 previewColor() const;
 
@@ -108,6 +115,20 @@ private:
     void loadPipelineCache();
     void savePipelineCache();
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, debug::DebugUi* debugUi);
+
+    // The frame's explicit pass list, in record order. Not a frame-graph:
+    // no automatic barrier derivation or resource dependency tracking,
+    // just named steps recordCommandBuffer calls in sequence so the order
+    // is visible in one place. Acquire (image acquire + fence wait) and
+    // Present (the post-barrier + vkQueuePresentKHR) bracket these from
+    // drawFrame() itself, outside any command buffer.
+    void recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent);
+    // Records nothing yet: reserved for GPU-driven work (frustum cull,
+    // indirect-command compaction) once there is more than one draw to
+    // cull. Kept as an explicit step now so adding that later doesn't
+    // reshuffle the pass order.
+    void recordComputePass(VkCommandBuffer cmd);
+    void recordOverlayPass(VkCommandBuffer cmd, debug::DebugUi* debugUi);
 
     keel::VulkanContext& context_;
     keel::Swapchain& swapchain_;
@@ -184,6 +205,7 @@ private:
     float phaseSpeedDegPerSec_ = 60.0f;
     bool paused_ = false;
     glm::mat4 model_{1.0f};
+    frame::Camera camera_{};
     float elapsedTimeSeconds_ = 0.0f;
     uint64_t lastTicks_ = 0;
     bool clockStarted_ = false;

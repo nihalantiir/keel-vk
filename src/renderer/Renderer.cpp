@@ -169,6 +169,11 @@ std::vector<uint8_t> makeSolidPattern(uint32_t width, uint32_t height, uint8_t r
 
 Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window, keel::Vfs& vfs)
     : context_(context), swapchain_(swapchain), window_(window), vfs_(vfs) {
+    // Fixed, not input-driven: the stock cube has no camera controller (see
+    // the wiki's Extending page). Same eye point simple-vk's old lookAt used.
+    camera_.position = glm::vec3(2.2f, 1.8f, 2.6f);
+    camera_.front = glm::normalize(-camera_.position);
+
     createCommandPool();
     createUploadCommandPool();
     createCommandBuffers();
@@ -658,10 +663,15 @@ void Renderer::createPipeline() {
     VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    // Reverse-Z: near is 1.0, far (infinity) is 0.0 (see frame::Camera::
+    // projection), depth clears to 0.0 below, so "closer" means "greater".
+    // GREATER_OR_EQUAL, not GREATER, so a fragment exactly at the clear
+    // value (nothing drawn there yet) still compares correctly at the
+    // first draw into a pixel.
     VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     depthStencil.depthTestEnable = VK_TRUE;
     depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -784,7 +794,7 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
     depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.clearValue.depthStencil = {1.0f, 0};
+    depthAttachment.clearValue.depthStencil = {0.0f, 0}; // reverse-Z: far, not near
 
     VkRenderingInfo renderingInfo{VK_STRUCTURE_TYPE_RENDERING_INFO};
     renderingInfo.renderArea = {{0, 0}, extent};
@@ -795,55 +805,14 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
 
     vkCmdBeginRendering(cmd, &renderingInfo);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-
-    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height),
-                               0.0f, 1.0f};
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-    const VkRect2D scissor{{0, 0}, extent};
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    // model_ is set each frame in main() from a keel::World entity's
-    // Transform (see src/shared/Components.h's toMatrix); Renderer only
-    // consumes it here.
-    const glm::mat4 view = glm::lookAt(glm::vec3(2.2f, 1.8f, 2.6f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
-    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
-    // GLM's clip space assumes OpenGL's Y-up NDC; Vulkan's NDC Y points down.
-    // Flipping this one entry is the standard fix instead of reaching for a
-    // GLM Vulkan-specific build.
-    proj[1][1] *= -1.0f;
-
-    const bool hasActiveDemoTexture =
-        activeDemoTextureIndex_ >= 0 && activeDemoTextureIndex_ < static_cast<int>(demoTextures_.size());
-    const uint32_t activeSlot = hasActiveDemoTexture
-                                     ? demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)].slot
-                                     : 0; // falls back to the streamer's resident default
-
-    PushConstants pushConstants{};
-    pushConstants.mvp = proj * view * model_;
-    pushConstants.time = elapsedTimeSeconds_;
-    pushConstants.phaseSpeed = phaseSpeedDegPerSec_;
-    pushConstants.textureIndex = activeSlot;
-    vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                        sizeof(pushConstants), &pushConstants);
-
-    const VkDescriptorSet bindlessSet = textureStreamer_->descriptorSet();
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &bindlessSet, 0, nullptr);
-
-    const VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
-    vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexedIndirect(cmd, indirectBuffer_, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
-
-#if KEEL_VK_IMGUI
-    if (debugUi) {
-        debugUi->render(cmd);
-    }
-#else
-    static_cast<void>(debugUi);
-#endif
+    // Explicit pass order for this frame. Acquire (image acquire + fence
+    // wait) already happened in drawFrame(), before this command buffer
+    // started recording; Present (the post-barrier below + the eventual
+    // vkQueuePresentKHR) happens after. See Renderer.h for why this is a
+    // named list of steps and not a frame-graph.
+    recordWorldPass(cmd, extent);
+    recordComputePass(cmd);
+    recordOverlayPass(cmd, debugUi);
 
     vkCmdEndRendering(cmd);
 
@@ -868,6 +837,63 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
     vkCmdPipelineBarrier2(cmd, &postDependency);
 
     keel::vkCheck(vkEndCommandBuffer(cmd), "Failed to end command buffer");
+}
+
+void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+
+    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height),
+                               0.0f, 1.0f};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    const VkRect2D scissor{{0, 0}, extent};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // model_ is set each frame in main() from a keel::World entity's
+    // Transform (see src/shared/Components.h's toMatrix); Renderer only
+    // consumes it here. Floating origin: model_'s translation is in world
+    // space, so origin has to be subtracted from it the same way camera_
+    // already subtracts it from the eye point in Camera::view(), or the
+    // object and the camera would drift apart as origin moves.
+    const glm::mat4 originAdjustedModel = glm::translate(glm::mat4(1.0f), -camera_.origin) * model_;
+    const float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
+
+    const bool hasActiveDemoTexture =
+        activeDemoTextureIndex_ >= 0 && activeDemoTextureIndex_ < static_cast<int>(demoTextures_.size());
+    const uint32_t activeSlot = hasActiveDemoTexture
+                                     ? demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)].slot
+                                     : 0; // falls back to the streamer's resident default
+
+    PushConstants pushConstants{};
+    pushConstants.mvp = camera_.projection(aspect) * camera_.view() * originAdjustedModel;
+    pushConstants.time = elapsedTimeSeconds_;
+    pushConstants.phaseSpeed = phaseSpeedDegPerSec_;
+    pushConstants.textureIndex = activeSlot;
+    vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                        sizeof(pushConstants), &pushConstants);
+
+    const VkDescriptorSet bindlessSet = textureStreamer_->descriptorSet();
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &bindlessSet, 0, nullptr);
+
+    const VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
+    vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexedIndirect(cmd, indirectBuffer_, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+}
+
+void Renderer::recordComputePass(VkCommandBuffer cmd) {
+    static_cast<void>(cmd);
+}
+
+void Renderer::recordOverlayPass(VkCommandBuffer cmd, debug::DebugUi* debugUi) {
+#if KEEL_VK_IMGUI
+    if (debugUi) {
+        debugUi->render(cmd);
+    }
+#else
+    static_cast<void>(cmd);
+    static_cast<void>(debugUi);
+#endif
 }
 
 void Renderer::drawFrame(debug::DebugUi* debugUi) {

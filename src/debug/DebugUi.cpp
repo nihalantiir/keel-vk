@@ -1,5 +1,6 @@
 #include "DebugUi.h"
 
+#include "../frame/Camera.h"
 #include "../keel-vk/Swapchain.h"
 #include "../keel-vk/VkCheck.h"
 #include "../keel-vk/VulkanContext.h"
@@ -114,6 +115,12 @@ void DebugUi::drawOverlay() {
     const VkExtent2D extent = swapchain_.extent();
     ImGui::Text("Swapchain %ux%u, %s", extent.width, extent.height, presentModeLabel(swapchain_.presentMode()));
     ImGui::Text("Device: %s", deviceName_.c_str());
+
+    ImGui::Separator();
+    frame::Camera& camera = renderer_.camera();
+    ImGui::TextDisabled("Depth: reverse-Z, infinite far (compare GREATER_OR_EQUAL, clear 0.0)");
+    ImGui::SliderFloat("Near plane", &camera.nearPlane, 0.01f, 5.0f);
+    ImGui::DragFloat3("Origin (floating-origin offset)", &camera.origin.x, 0.1f);
 
     ImGui::Separator();
     ImGui::ColorEdit3("Clear color", renderer_.clearColor());
