@@ -12,8 +12,7 @@ enum class Action {
 };
 
 // Lifts raw SDL3 key events into named actions, decoupling gameplay/UI
-// code from scancodes. Bindings are fixed for this landing; a real rebind
-// system is not started.
+// code from scancodes. Bindings are fixed; no rebind system exists.
 class ActionMap {
 public:
     void processEvent(const SDL_Event& event);

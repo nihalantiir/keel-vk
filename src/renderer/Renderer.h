@@ -235,9 +235,9 @@ private:
     MeshRange cubeMesh_{};
 
     // Per-instance data the World pass reads via an SSBO (set 1), indexed
-    // by gl_InstanceIndex. Capacity is sized for a real scene even though
-    // only slot 0 (the cube) is ever populated this landing; see the
-    // wiki's Rendering page. One buffer pair per frame in flight, like
+    // by gl_InstanceIndex. Capacity (256) is sized well past what's
+    // actually populated (the hero cube plus a small satellite ring, see
+    // the wiki's Rendering page). One buffer pair per frame in flight, like
     // simple-vk's old per-frame vertex buffers, since CPU writes a new
     // model/visible/bounds every frame and a previous frame's draw might
     // still be reading the other copy.

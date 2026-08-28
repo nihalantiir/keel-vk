@@ -150,7 +150,7 @@ DeviceMemoryBudget queryDeviceLocalBudget(keel::VulkanContext& context) {
 
 // 8x8 checkerboard, loaded from the base content pack as raw RGBA8 bytes:
 // no image-loading dependency (see the wiki's Libraries page - stb_image
-// is deliberately not in this landing), just a format known ahead of time.
+// is deliberately not used), just a format known ahead of time.
 constexpr uint32_t kCheckerSize = 8;
 
 std::array<uint8_t, kCheckerSize * kCheckerSize * 4> loadCheckerPixels(keel::Vfs& vfs) {
@@ -467,7 +467,7 @@ VkBuffer createMappedBuffer(keel::VulkanContext& context, VkDeviceSize size, VkB
 
 void Renderer::createMeshPool() {
     // Capacity is a scaffold, not a measurement: comfortably more than the
-    // one cube mesh this landing allocates, so MeshPool::allocate has real
+    // one cube mesh currently allocated, so MeshPool::allocate has real
     // room to demonstrate subrange allocation instead of exactly fitting
     // one caller.
     meshPool_ = std::make_unique<MeshPool>(context_, uploadCommandPool_, uploadTimelineSemaphore_, 1, 8192, 16384,

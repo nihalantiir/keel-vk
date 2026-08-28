@@ -21,9 +21,9 @@ void main() {
     vec3 texel;
     if (fragTextureKind == kTextureKindBindless) {
         // fragTextureIndex is flat-interpolated, so it is the same value
-        // for every invocation across a triangle but can still differ
-        // between instances/draws; nonuniformEXT covers that case even
-        // though today's single instance makes it dynamically uniform too.
+        // for every invocation across a triangle but differs between
+        // instances (the hero and each satellite can sample a different
+        // bindless slot); nonuniformEXT is required for that, not optional.
         texel = texture(bindlessTextures[nonuniformEXT(fragTextureIndex)], fragUv).rgb;
     } else if (fragTextureKind == kTextureKindArray) {
         texel = texture(residencyArray, vec3(fragUv, float(fragTextureIndex))).rgb;
