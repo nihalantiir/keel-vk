@@ -29,6 +29,7 @@ public:
 
     SDL_Window* handle() const { return window_; }
     bool shouldClose() const { return quitRequested_; }
+    void requestQuit() { quitRequested_ = true; }
     bool consumeResizedFlag();
 
 private:

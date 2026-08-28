@@ -823,7 +823,9 @@ void Renderer::drawFrame(debug::DebugUi* debugUi) {
     const float dt =
         static_cast<float>(now - lastTicks_) / static_cast<float>(SDL_GetPerformanceFrequency());
     lastTicks_ = now;
-    elapsedTimeSeconds_ += dt;
+    if (!paused_) {
+        elapsedTimeSeconds_ += dt;
+    }
 
     const VkDevice device = context_.device();
 

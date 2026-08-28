@@ -41,6 +41,10 @@ public:
     float* clearColor() { return clearColor_; }
     float& phaseSpeed() { return phaseSpeedDegPerSec_; }
 
+    // Freezes rotation and hue phase (elapsed time stops advancing) when
+    // true. Driven by client::ActionMap's Pause action.
+    bool& paused() { return paused_; }
+
     // Read-only: the front face's current hue-cycled color, for the overlay.
     glm::vec3 previewColor() const;
 
@@ -121,6 +125,7 @@ private:
 
     float clearColor_[3] = {0.15f, 0.15f, 0.16f};
     float phaseSpeedDegPerSec_ = 60.0f;
+    bool paused_ = false;
     float elapsedTimeSeconds_ = 0.0f;
     uint64_t lastTicks_ = 0;
     bool clockStarted_ = false;

@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract: needed to index a bindless array with `nonuniformEXT`, which
   the earlier descriptor-indexing feature bits alone don't cover.
 - Shader compilation now passes `--target-env=vulkan1.3` to `glslc`.
+- `src/shared/Clock.h`: a generic fixed-timestep accumulator (`FixedClock`),
+  not tied to SDL or Vulkan, reserved for future fixed-rate systems. Wired
+  into the client's main loop but not driving anything visible yet.
+- `src/client/ActionMap`: lifts SDL3 key events into named actions.
+  `Pause` (Space) freezes the cube's rotation and hue phase; `Escape` quits.
+  Both are wired into `main()`'s loop alongside the existing event polling.
 
 ## [0.1.0] - 2026-08-28
 

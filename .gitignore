@@ -11,6 +11,9 @@ CMakeUserPresets.json
 
 *.spv
 
+# Dear ImGui window-layout state, written next to wherever the exe was run from
+imgui.ini
+
 # OS cruft
 .DS_Store
 Thumbs.db
