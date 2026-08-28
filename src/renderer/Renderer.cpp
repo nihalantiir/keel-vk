@@ -19,6 +19,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -563,8 +564,13 @@ void Renderer::createUploadTimelineSemaphore() {
 }
 
 void Renderer::createTextureStreamer() {
-    textureStreamer_ = std::make_unique<TextureStreamer>(context_, commandPool_, kMaxBindlessTextures,
-                                                           kFramesInFlight);
+    // kMaxBindlessTextures is a scaffold width, not a guarantee: a device
+    // could conformantly report a smaller
+    // maxDescriptorSetUpdateAfterBindSampledImages/per-stage limit. Shrink
+    // to whatever the device actually supports rather than creating a
+    // descriptor set layout the device can't allocate.
+    bindlessCapacity_ = std::min(kMaxBindlessTextures, context_.maxBindlessSampledImages());
+    textureStreamer_ = std::make_unique<TextureStreamer>(context_, commandPool_, bindlessCapacity_, kFramesInFlight);
 
     // Demo content so the overlay's texture-slot control has more than one
     // real texture to cycle between. Slot 0 (the streamer's own resident

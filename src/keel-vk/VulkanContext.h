@@ -59,6 +59,15 @@ public:
     // heap-size estimate.
     bool memoryBudgetSupported() const { return memoryBudgetSupported_; }
 
+    // The device's real cap on the bindless sampled-image array
+    // (min of maxDescriptorSetUpdateAfterBindSampledImages and the
+    // matching per-stage limit, both from
+    // VkPhysicalDeviceDescriptorIndexingProperties), queried at device
+    // pick time. TextureStreamer sizes its array to
+    // min(its own scaffold width, this), never past what the device
+    // actually reports.
+    uint32_t maxBindlessSampledImages() const { return maxBindlessSampledImages_; }
+
 private:
     void createInstance(Window& window);
     void setupDebugMessenger();
@@ -87,6 +96,8 @@ private:
     bool extendedDynamicState2Supported_ = false;
     bool extendedDynamicState3Supported_ = false;
     bool hostQueryResetSupported_ = false;
+    bool bufferDeviceAddressSupported_ = false;
+    uint32_t maxBindlessSampledImages_ = 0;
     const char* calibratedTimestampsExtensionName_ = nullptr;
 };
 

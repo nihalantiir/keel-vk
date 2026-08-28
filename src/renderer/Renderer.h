@@ -85,7 +85,10 @@ public:
     // Read-only: the front face's current hue-cycled color, for the overlay.
     glm::vec3 previewColor() const;
 
+    // Scaffold width, not a guarantee: the array is actually created at
+    // min(this, the device's real limit), see bindlessCapacity().
     static constexpr uint32_t kMaxBindlessTextures = 256;
+    uint32_t bindlessCapacity() const { return bindlessCapacity_; }
     uint32_t boundTextureCount() const { return textureStreamer_->usedSlots(); }
 
     // Demo controls for the debug overlay: which of demoTextures_ the cube
@@ -274,6 +277,7 @@ private:
     // set layout/pool/set; Renderer only asks it for those to build the
     // pipeline layout and bind at draw time.
     std::unique_ptr<TextureStreamer> textureStreamer_;
+    uint32_t bindlessCapacity_ = 0; // set in createTextureStreamer(), see bindlessCapacity()
     std::vector<TextureHandle> demoTextures_; // slots 1..N: checker, stripes, gradient, spare
     // Parallel to demoTextures_: byte size (for demoResidentBytes()) and
     // the frame each entry was last the hero's active Bindless texture

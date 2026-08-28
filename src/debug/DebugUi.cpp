@@ -150,7 +150,7 @@ void DebugUi::drawOverlay() {
     ImGui::TextDisabled("The cube samples whichever path is selected above - all three are live, not just built.");
 
     ImGui::Text("Bindless textures: %u / %u slots used", renderer_.boundTextureCount(),
-                renderer::Renderer::kMaxBindlessTextures);
+                renderer_.bindlessCapacity());
     if (renderer_.memoryBudgetSupported()) {
         ImGui::Text("VRAM: %.1f / %.1f MB (VK_EXT_memory_budget)",
                     static_cast<double>(renderer_.deviceMemoryUsageBytes()) / (1024.0 * 1024.0),

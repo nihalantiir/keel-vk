@@ -4,6 +4,7 @@
 #include "VkCheck.h"
 #include "Window.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <iostream>
@@ -79,8 +80,10 @@ std::vector<std::string> missingRequirements(VkPhysicalDevice device, VkSurfaceK
     if (!chain.features13.synchronization2) missing.push_back("synchronization2");
     if (!chain.features13.maintenance4) missing.push_back("maintenance4");
 
+    // bufferDeviceAddress is deliberately not required: nothing in this
+    // template uses GL_EXT_buffer_reference or vkGetBufferDeviceAddress.
+    // Enabled when present (see createLogicalDevice), never gated on.
     if (!chain.features12.timelineSemaphore) missing.push_back("timelineSemaphore");
-    if (!chain.features12.bufferDeviceAddress) missing.push_back("bufferDeviceAddress");
     if (!chain.features12.descriptorIndexing) missing.push_back("descriptorIndexing");
     if (!chain.features12.runtimeDescriptorArray) missing.push_back("runtimeDescriptorArray");
     if (!chain.features12.descriptorBindingPartiallyBound) missing.push_back("descriptorBindingPartiallyBound");
@@ -349,6 +352,19 @@ void VulkanContext::pickPhysicalDevice() {
 
     const DeviceFeatureChain chain = queryFeatures(physicalDevice_);
     hostQueryResetSupported_ = chain.features12.hostQueryReset == VK_TRUE;
+    bufferDeviceAddressSupported_ = chain.features12.bufferDeviceAddress == VK_TRUE;
+
+    // The real cap on the bindless sampled-image array TextureStreamer
+    // builds: min of the whole-set limit and the per-stage limit, since
+    // it's bound in one stage (fragment) but the set-wide limit still
+    // applies. See VulkanContext::maxBindlessSampledImages().
+    VkPhysicalDeviceDescriptorIndexingProperties descriptorIndexingProps{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES};
+    VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    props2.pNext = &descriptorIndexingProps;
+    vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
+    maxBindlessSampledImages_ = std::min(descriptorIndexingProps.maxDescriptorSetUpdateAfterBindSampledImages,
+                                          descriptorIndexingProps.maxPerStageDescriptorUpdateAfterBindSampledImages);
 }
 
 void VulkanContext::createLogicalDevice() {
@@ -377,7 +393,7 @@ void VulkanContext::createLogicalDevice() {
 
     VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     features12.timelineSemaphore = VK_TRUE;
-    features12.bufferDeviceAddress = VK_TRUE;
+    features12.bufferDeviceAddress = bufferDeviceAddressSupported_ ? VK_TRUE : VK_FALSE; // optional, unused
     features12.descriptorIndexing = VK_TRUE;
     features12.runtimeDescriptorArray = VK_TRUE;
     features12.descriptorBindingPartiallyBound = VK_TRUE;
@@ -450,7 +466,7 @@ void VulkanContext::createAllocator() {
     if (memoryBudgetSupported_) {
         info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
     }
-    if (queryFeatures(physicalDevice_).features12.bufferDeviceAddress) {
+    if (bufferDeviceAddressSupported_) {
         info.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     }
 

@@ -40,7 +40,7 @@ Inherited from simple-vk / the Vulkan SDK:
 What Keel adds on top (the foundation, see [Architecture](https://github.com/nihalantiir/keel-vk/wiki/Architecture)):
 
 - A stricter Vulkan 1.3 device contract (descriptor indexing, timeline
-  semaphores, buffer device address, and more - see
+  semaphores, and more - see
   [Device contract](https://github.com/nihalantiir/keel-vk/wiki/Device-contract))
 - Bindless + texture-array + atlas residency
 - `keel::World` (EnTT), `keel::Vfs`, `shared::FixedClock`, `net::Host` (ENet)
