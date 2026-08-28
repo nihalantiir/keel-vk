@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
                        << std::endl;
         }
 
-        keel::Window window("keel-vk: working (v0.6.0)", config.windowWidth, config.windowHeight);
+        keel::Window window("keel-vk: working (v0.7.0)", config.windowWidth, config.windowHeight);
         keel::Vfs vfs(config.packageRootOverride); // mounts packages/ next to the executable, or the override
         keel::VulkanContext context(window);
         keel::Swapchain swapchain(context, window, client::toVkPresentMode(config.presentModePreference));

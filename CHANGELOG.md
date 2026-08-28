@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-29
+
+Cooked textures, real budget policy.
+
+### Added
+
+- `renderer::loadKtx2` reads a narrow subset of KTX2 (one level, no
+  supercompression, no array layers, no cubemaps) - enough to back
+  `packages/base/textures/demo_bc7.ktx2`, a BC7-compressed fixture baked
+  by `tools/bake_ktx2_fixture.py`. `VK_FORMAT_BC7_UNORM_BLOCK` sampled is
+  now part of the device contract. `TextureStreamer::allocateCompressed`
+  shares `allocate()`'s slot/descriptor/staging machinery for a caller-
+  specified format instead of assuming RGBA8; bindless sampling is
+  format-agnostic, so the fixture drops into the existing demo-texture
+  rotation with no shader change. The RGBA8 checker stays as the
+  uncompressed, contract-test path.
+
+### Changed
+
+- `maybeEvictDemoTexture`'s 2048-byte artificial cap now only runs
+  inside `KEEL_VK_DEBUG` - it models a developer's ability to trigger
+  eviction on demand, not real memory pressure, so it no longer acts
+  outside a Debug build. When `VK_EXT_memory_budget` is present, a
+  second, real trigger checks actual device usage against actual budget
+  (correct if a fork's content ever approaches it; never fires at this
+  demo's scale). The overlay's VRAM line reads "N/A" instead of an
+  estimated number when the extension is missing.
+
 ## [0.6.0] - 2026-08-28
 
 Limits, queues, config, axes. No new rendering paths.
