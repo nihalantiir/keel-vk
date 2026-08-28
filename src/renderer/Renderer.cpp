@@ -8,6 +8,7 @@
 #include "../keel-vk/Window.h"
 #include "../shared/Vfs.h"
 #include "Frustum.h"
+#include "Ktx2.h"
 #include "TextureArray2D.h"
 
 #if KEEL_VK_IMGUI
@@ -595,6 +596,20 @@ void Renderer::createTextureStreamer() {
     const std::vector<uint8_t> spare = makeSolidPattern(8, 8, 200, 200, 200);
     demoTextures_.push_back(textureStreamer_->allocate(8, 8, spare.data(), "spare (generated)"));
     demoTextureBytes_.push_back(8 * 8 * 4);
+
+    // The one cooked-format fixture: BC7, read from a real KTX2 container
+    // (see Ktx2.h) instead of the raw-bytes-known-ahead-of-time trick the
+    // RGBA8 demo textures above use. Lands in the same bindless rotation
+    // as everything else - sampling is format-agnostic once the image is
+    // resident, so no shader change was needed to add this.
+    const renderer::Ktx2Image bc7Fixture = renderer::loadKtx2(vfs_.resolve("textures/demo_bc7.ktx2"));
+    if (bc7Fixture.format != VK_FORMAT_BC7_UNORM_BLOCK) {
+        throw std::runtime_error("demo_bc7.ktx2: expected VK_FORMAT_BC7_UNORM_BLOCK");
+    }
+    demoTextures_.push_back(textureStreamer_->allocateCompressed(bc7Fixture.width, bc7Fixture.height,
+                                                                   bc7Fixture.format, bc7Fixture.data.data(),
+                                                                   bc7Fixture.data.size(), "demo (BC7, packages/base)"));
+    demoTextureBytes_.push_back(static_cast<VkDeviceSize>(bc7Fixture.data.size()));
 
     demoTextureLastUsedFrame_.assign(demoTextures_.size(), 0);
     for (size_t i = 0; i < demoTextureLastUsedFrame_.size(); ++i) {

@@ -169,6 +169,7 @@ set(KEEL_VK_CLIENT_SOURCES
   src/keel-vk/VmaImpl.cpp
   src/renderer/Renderer.cpp
   src/renderer/MeshPool.cpp
+  src/renderer/Ktx2.cpp
   src/renderer/TextureStreamer.cpp
   src/renderer/TextureArray2D.cpp
   src/renderer/Atlas2D.cpp

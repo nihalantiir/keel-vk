@@ -125,16 +125,17 @@ void TextureStreamer::createDescriptorObjects() {
 
 void TextureStreamer::reserveDefaultSlot() {
     static constexpr std::array<uint8_t, 4> kWhitePixel = {255, 255, 255, 255};
-    createSlotImage(0, 1, 1, "bindless default (white)");
-    queueUpload(0, slots_[0].generation, 1, 1, kWhitePixel.data());
+    createSlotImage(0, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, "bindless default (white)");
+    queueUpload(0, slots_[0].generation, 1, 1, kWhitePixel.data(), 4);
 }
 
-void TextureStreamer::createSlotImage(uint32_t slotIndex, uint32_t width, uint32_t height, const char* debugName) {
+void TextureStreamer::createSlotImage(uint32_t slotIndex, uint32_t width, uint32_t height, VkFormat format,
+                                       const char* debugName) {
     Slot& slot = slots_[slotIndex];
 
     VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.format = format;
     imageInfo.extent = {width, height, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
@@ -161,7 +162,7 @@ void TextureStreamer::createSlotImage(uint32_t slotIndex, uint32_t width, uint32
     VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = slot.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.format = format;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     keel::vkCheck(vkCreateImageView(context_.device(), &viewInfo, nullptr, &slot.view),
                   "Failed to create bindless texture view");
@@ -216,8 +217,7 @@ void TextureStreamer::reclaimDeferredDestroys() {
 }
 
 void TextureStreamer::queueUpload(uint32_t slotIndex, uint32_t generation, uint32_t width, uint32_t height,
-                                   const void* pixels) {
-    const VkDeviceSize sizeBytes = static_cast<VkDeviceSize>(width) * height * 4;
+                                   const void* pixels, VkDeviceSize sizeBytes) {
     const uint32_t ringIndex = claimStagingRingEntry(sizeBytes);
     std::memcpy(stagingRing_[ringIndex].mapped, pixels, static_cast<size_t>(sizeBytes));
     pendingUploads_.push_back({slotIndex, generation, width, height, ringIndex});
@@ -255,8 +255,24 @@ TextureHandle TextureStreamer::allocate(uint32_t width, uint32_t height, const v
         throw std::runtime_error("TextureStreamer: no free bindless slots");
     }
 
-    createSlotImage(slotIndex, width, height, debugName);
-    queueUpload(slotIndex, slots_[slotIndex].generation, width, height, pixelsRgba8);
+    createSlotImage(slotIndex, width, height, VK_FORMAT_R8G8B8A8_UNORM, debugName);
+    queueUpload(slotIndex, slots_[slotIndex].generation, width, height, pixelsRgba8,
+                static_cast<VkDeviceSize>(width) * height * 4);
+
+    return TextureHandle{slotIndex, slots_[slotIndex].generation};
+}
+
+TextureHandle TextureStreamer::allocateCompressed(uint32_t width, uint32_t height, VkFormat format,
+                                                    const void* blockData, size_t dataSizeBytes,
+                                                    const char* debugName) {
+    const uint32_t slotIndex = findFreeSlotIndex();
+    if (slotIndex == capacity_) {
+        throw std::runtime_error("TextureStreamer: no free bindless slots");
+    }
+
+    createSlotImage(slotIndex, width, height, format, debugName);
+    queueUpload(slotIndex, slots_[slotIndex].generation, width, height, blockData,
+                static_cast<VkDeviceSize>(dataSizeBytes));
 
     return TextureHandle{slotIndex, slots_[slotIndex].generation};
 }
@@ -269,9 +285,10 @@ void TextureStreamer::update(TextureHandle& handle, uint32_t width, uint32_t hei
     }
 
     freeSlotResources(handle.slot); // old image/view deferred-destroyed, not reused
-    createSlotImage(handle.slot, width, height, debugName);
+    createSlotImage(handle.slot, width, height, VK_FORMAT_R8G8B8A8_UNORM, debugName);
     ++slot.generation;
-    queueUpload(handle.slot, slot.generation, width, height, pixelsRgba8);
+    queueUpload(handle.slot, slot.generation, width, height, pixelsRgba8,
+                static_cast<VkDeviceSize>(width) * height * 4);
     handle.generation = slot.generation;
 }
 

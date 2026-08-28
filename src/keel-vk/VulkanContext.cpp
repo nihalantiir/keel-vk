@@ -109,6 +109,17 @@ std::vector<std::string> missingRequirements(VkPhysicalDevice device, VkSurfaceK
     vkGetPhysicalDeviceFeatures(device, &features10);
     if (!features10.multiDrawIndirect) missing.push_back("multiDrawIndirect");
     if (!features10.drawIndirectFirstInstance) missing.push_back("drawIndirectFirstInstance");
+    if (!features10.textureCompressionBC) missing.push_back("textureCompressionBC");
+
+    // BC7 specifically, sampled: textureCompressionBC covers the whole BC
+    // family, but this template only ever creates BC7 images (see
+    // Ktx2.h/TextureStreamer::allocateCompressed). Checking the one format
+    // actually used is more honest than trusting the umbrella feature bit.
+    VkFormatProperties bc7Props;
+    vkGetPhysicalDeviceFormatProperties(device, VK_FORMAT_BC7_UNORM_BLOCK, &bc7Props);
+    if (!(bc7Props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+        missing.push_back("VK_FORMAT_BC7_UNORM_BLOCK sampled (optimal tiling)");
+    }
 
     return missing;
 }

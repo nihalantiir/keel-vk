@@ -51,6 +51,13 @@ public:
     // processUploads() call.
     TextureHandle allocate(uint32_t width, uint32_t height, const void* pixelsRgba8, const char* debugName);
 
+    // Same slot/descriptor machinery as allocate(), for a format other
+    // than plain RGBA8 (e.g. a block-compressed format read from a KTX2
+    // file - see Ktx2.h). blockData is dataSizeBytes raw bytes already in
+    // the target format's on-disk layout; nothing here transcodes.
+    TextureHandle allocateCompressed(uint32_t width, uint32_t height, VkFormat format, const void* blockData,
+                                      size_t dataSizeBytes, const char* debugName);
+
     // Replaces a slot's content in place: same slot index, new image, new
     // generation. The old image is only destroyed once it's safe (see the
     // frame-in-flight retirement in freeSlotResources).
@@ -105,12 +112,14 @@ private:
     void createSampler();
     void createDescriptorObjects();
     void reserveDefaultSlot();
-    void createSlotImage(uint32_t slotIndex, uint32_t width, uint32_t height, const char* debugName);
+    void createSlotImage(uint32_t slotIndex, uint32_t width, uint32_t height, VkFormat format,
+                          const char* debugName);
     void freeSlotResources(uint32_t slotIndex);
     uint32_t claimStagingRingEntry(VkDeviceSize sizeBytes);
     void reclaimStagingRing();
     void reclaimDeferredDestroys();
-    void queueUpload(uint32_t slotIndex, uint32_t generation, uint32_t width, uint32_t height, const void* pixels);
+    void queueUpload(uint32_t slotIndex, uint32_t generation, uint32_t width, uint32_t height, const void* pixels,
+                      VkDeviceSize sizeBytes);
     void updateDescriptorSlot(uint32_t slotIndex, VkImageView view);
     uint32_t findFreeSlotIndex() const;
 
@@ -128,8 +137,9 @@ private:
 
     // Must comfortably exceed the largest batch of allocate()/update() calls
     // made before the next processUploads() flush: Renderer's startup batch
-    // (default + checker + stripes + gradient + spare = 5) is the biggest
-    // one today, and nothing reclaims a ring entry until a flush happens.
+    // (default + checker + stripes + gradient + spare + the BC7 fixture = 6)
+    // is the biggest one today, and nothing reclaims a ring entry until a
+    // flush happens.
     static constexpr uint32_t kStagingRingSize = 8;
     static constexpr VkDeviceSize kStagingEntryBytes = 128 * 128 * 4; // covers every demo texture with room to spare
     std::array<StagingRingEntry, kStagingRingSize> stagingRing_;
