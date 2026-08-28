@@ -8,6 +8,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(KEEL_VK_IMGUI "Build the Dear ImGui debug overlay (fetches Dear ImGui via CMake FetchContent)" ON)
 
+# Keep MSVC's .pdb next to the executables instead of scattered in build/,
+# same directory RUNTIME_OUTPUT_DIRECTORY already uses below.
+set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
@@ -192,6 +197,12 @@ target_compile_options(keel-vk PRIVATE
   $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
 )
 
+# /INCREMENTAL:NO on Release so MSVC doesn't emit a .ilk next to the
+# shipped exe; incremental linking is a debug-loop convenience only.
+target_link_options(keel-vk PRIVATE
+  $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/INCREMENTAL:NO>
+)
+
 target_link_libraries(keel-vk PRIVATE
   volk::volk
   GPUOpen::VulkanMemoryAllocator
@@ -214,6 +225,9 @@ target_include_directories(keel-vk-server PRIVATE src)
 target_link_libraries(keel-vk-server PRIVATE enet)
 set_target_properties(keel-vk-server PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+target_link_options(keel-vk-server PRIVATE
+  $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/INCREMENTAL:NO>
 )
 
 # --- Shader compilation (GLSL -> SPIR-V) ---

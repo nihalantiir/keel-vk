@@ -9,6 +9,30 @@ compile_commands.json
 .idea/
 CMakeUserPresets.json
 
+# MSVC/CMake byproducts, in case anything ever configures outside build/
+# (build/ already covers the normal case)
+*.ilk
+*.pdb
+*.idb
+*.ipdb
+*.iobj
+*.exp
+*.obj
+*.lib
+*.ilk.tmp
+*.opendb
+*.VC.db
+*.VC.opendb
+*.ipch
+ipch/
+*.aps
+*.pch
+*.sbr
+*.bsc
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
 *.spv
 
 # Dear ImGui window-layout state, written next to wherever the exe was run from
