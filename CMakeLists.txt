@@ -8,6 +8,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(KEEL_VK_IMGUI "Build the Dear ImGui debug overlay (fetches Dear ImGui via CMake FetchContent)" ON)
 
+# Default ON only when this is the top-level project (building this repo
+# directly); default OFF when add_subdirectory()'d - a consumer linking
+# keel must not inherit keel-vk/keel-vk-server unless they opt in. See
+# the wiki's Extending page.
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+  set(KEEL_VK_BUILD_APPS_DEFAULT ON)
+else()
+  set(KEEL_VK_BUILD_APPS_DEFAULT OFF)
+endif()
+option(KEEL_VK_BUILD_APPS "Build keel-vk and keel-vk-server (this repo's own contract-test exe and headless stub)"
+  ${KEEL_VK_BUILD_APPS_DEFAULT})
+
 # Keep MSVC's .pdb next to the executables instead of scattered in build/,
 # same directory RUNTIME_OUTPUT_DIRECTORY already uses below.
 # CMAKE_CURRENT_BINARY_DIR everywhere in this file, not CMAKE_BINARY_DIR:
@@ -271,35 +283,39 @@ if(KEEL_VK_IMGUI)
   target_link_libraries(keel PUBLIC imgui) # DebugUi.h's own includes need imgui.h visible to consumers
 endif()
 
-# --- keel-vk: this repo's own contract-test executable. Everything about
-# the hero cube, the satellite ring, and the demo textures lives here or
-# in ContractTest.cpp, never in keel itself - see the wiki's Extending
-# page. ---
-add_executable(keel-vk src/client/main.cpp src/client/ContractTest.cpp)
-target_link_libraries(keel-vk PRIVATE keel)
+# --- keel-vk and keel-vk-server: this repo's own contract-test
+# executable and headless stub. Gated behind KEEL_VK_BUILD_APPS: a
+# consumer that add_subdirectory()s this repo and links keel does not
+# get these unless they explicitly opt in - see the wiki's Extending
+# page. Everything about the hero cube, the satellite ring, and the demo
+# textures lives in keel-vk's own sources (main.cpp, ContractTest.cpp),
+# never in keel itself. ---
+if(KEEL_VK_BUILD_APPS)
+  add_executable(keel-vk src/client/main.cpp src/client/ContractTest.cpp)
+  target_link_libraries(keel-vk PRIVATE keel)
 
-# /INCREMENTAL:NO on Release so MSVC doesn't emit a .ilk next to the
-# shipped exe; incremental linking is a debug-loop convenience only.
-target_link_options(keel-vk PRIVATE
-  $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/INCREMENTAL:NO>
-)
+  # /INCREMENTAL:NO on Release so MSVC doesn't emit a .ilk next to the
+  # shipped exe; incremental linking is a debug-loop convenience only.
+  target_link_options(keel-vk PRIVATE
+    $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/INCREMENTAL:NO>
+  )
 
-set_target_properties(keel-vk PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
-)
+  set_target_properties(keel-vk PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
+  )
 
-# --- keel-vk-server: headless, no Vulkan/SDL, only the ENet transport.
-# Compiles Host.cpp directly rather than linking keel, which would pull
-# in Vulkan/SDL/glm/EnTT for a program that needs none of it. ---
-add_executable(keel-vk-server src/server/main.cpp src/net/Host.cpp)
-target_include_directories(keel-vk-server PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(keel-vk-server PRIVATE enet)
-set_target_properties(keel-vk-server PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
-)
-target_link_options(keel-vk-server PRIVATE
-  $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/INCREMENTAL:NO>
-)
+  # Compiles Host.cpp directly rather than linking keel, which would
+  # pull in Vulkan/SDL/glm/EnTT for a program that needs none of it.
+  add_executable(keel-vk-server src/server/main.cpp src/net/Host.cpp)
+  target_include_directories(keel-vk-server PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+  target_link_libraries(keel-vk-server PRIVATE enet)
+  set_target_properties(keel-vk-server PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
+  )
+  target_link_options(keel-vk-server PRIVATE
+    $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/INCREMENTAL:NO>
+  )
+endif()
 
 # --- keel_copy_runtime_assets(target): POST_BUILD copy of <caller>/packages
 # next to target's built executable, the same way this repo's own
@@ -309,13 +325,14 @@ target_link_options(keel-vk-server PRIVATE
 # reads CMAKE_CURRENT_SOURCE_DIR at the call site, not this listfile's,
 # so it resolves the caller's own packages/ directory, not this repo's.
 #
-# Also copies this repo's own compiled cube.vert.spv/cube.frag.spv next
-# to target: renderer::Renderer::createPipeline() unconditionally loads
-# them (this template's one pipeline isn't pluggable yet - see the wiki's
-# Extending page), so any target that constructs a Renderer needs them
-# next to its own executable, not just next to keel-vk's. Sourced from
-# KEEL_VK_SHADER_OUTPUT_DIR (a CACHE variable, set below, so it's visible
-# here regardless of which directory scope calls this function). ---
+# TEMPORARY: also copies this repo's own compiled cube.vert.spv/cube.frag.spv
+# next to target. This exists only because renderer::Renderer::createPipeline()
+# still hardcodes those two files as of this commit - once Renderer takes
+# its shader paths as a constructor argument instead (see the wiki's
+# Extending page, "Pipeline is data"), a consumer supplies its own
+# shaders and this copy goes away. Sourced from KEEL_VK_SHADER_OUTPUT_DIR
+# (a CACHE variable, set below, so it's visible here regardless of which
+# directory scope calls this function). ---
 function(keel_copy_runtime_assets target)
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -371,18 +388,20 @@ endforeach()
 
 add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
 
-# --- Copy packages/ and shaders/ next to the executable: keel::Vfs and
-# keel::ShaderModule both mount/load relative to SDL_GetBasePath(), the
-# executable's own directory. Also adds keel-vk's dependency on the
-# shaders custom target. ---
-keel_copy_runtime_assets(keel-vk)
+if(KEEL_VK_BUILD_APPS)
+  # --- Copy packages/ and shaders/ next to the executable: keel::Vfs and
+  # keel::ShaderModule both mount/load relative to SDL_GetBasePath(), the
+  # executable's own directory. Also adds keel-vk's dependency on the
+  # shaders custom target. ---
+  keel_copy_runtime_assets(keel-vk)
 
-# --- Windows: copy SDL3.dll next to the built executable ---
-if(WIN32)
-  add_custom_command(TARGET keel-vk POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "$<TARGET_FILE:SDL3::SDL3>"
-      "$<TARGET_FILE_DIR:keel-vk>"
-    COMMENT "Copying SDL3.dll next to the executable"
-  )
+  # --- Windows: copy SDL3.dll next to the built executable ---
+  if(WIN32)
+    add_custom_command(TARGET keel-vk POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:SDL3::SDL3>"
+        "$<TARGET_FILE_DIR:keel-vk>"
+      COMMENT "Copying SDL3.dll next to the executable"
+    )
+  endif()
 endif()
