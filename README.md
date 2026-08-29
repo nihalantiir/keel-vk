@@ -125,6 +125,47 @@ this template adds.
 A game built on Keel lives in its *own* repo, not inside this one. See
 [Architecture](https://github.com/nihalantiir/keel-vk/wiki/Architecture).
 
+## Using Keel from another repo
+
+Two libraries: `keel-vk-core` (layer 0, the generic Vulkan/SDL bootstrap)
+and `keel` (layer 1, the foundation - renderer, texture residency,
+ECS/net/VFS, the optional debug overlay). `keel` links `keel-vk-core`, so
+linking `keel` is enough for both. `src/client/main.cpp` (the cube
+executable) is not part of either library.
+
+Get the code into your own repo, either a git submodule or a plain copy:
+
+```
+git submodule add https://github.com/nihalantiir/keel-vk third_party/keel-vk
+```
+
+Then in your own `CMakeLists.txt`:
+
+```cmake
+add_subdirectory(third_party/keel-vk)
+
+add_executable(mygame src/main.cpp)
+target_link_libraries(mygame PRIVATE keel)
+keel_copy_runtime_assets(mygame)   # copies your own packages/ next to mygame's exe
+```
+
+`#include` headers the same way this repo's own sources do: `"renderer/Renderer.h"`,
+`"shared/World.h"`, `"client/Config.h"`, and so on - `add_subdirectory`
+puts `keel-vk/src` on your include path. `KEEL_VK_IMGUI` still works
+exactly as it does in this repo (`-DKEEL_VK_IMGUI=OFF` before your own
+`add_subdirectory` call, or set it as a normal CMake option in your own
+listfile before that line).
+
+`keel_copy_runtime_assets(target)` reads your own `packages/` directory
+(next to your `CMakeLists.txt`), not this repo's - it resolves relative
+to wherever it's called from. `keel::Vfs` throws a hard, resolved-path
+error at startup if that directory doesn't exist next to your built
+exe, so a missing or forgotten copy step fails loudly, not silently.
+
+See [Extending](https://github.com/nihalantiir/keel-vk/wiki/Extending)
+for the fork checklist: renaming the exe/title/package id, and what
+stays out of `src/keel-vk/`.
+
 ## Documentation
 
 Deeper docs live on the [wiki](https://github.com/nihalantiir/keel-vk/wiki).

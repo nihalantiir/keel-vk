@@ -10,8 +10,12 @@ option(KEEL_VK_IMGUI "Build the Dear ImGui debug overlay (fetches Dear ImGui via
 
 # Keep MSVC's .pdb next to the executables instead of scattered in build/,
 # same directory RUNTIME_OUTPUT_DIRECTORY already uses below.
-set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+# CMAKE_CURRENT_BINARY_DIR everywhere in this file, not CMAKE_BINARY_DIR:
+# when a consumer add_subdirectory()s this repo, CMAKE_BINARY_DIR is
+# THEIR top-level build root, not this project's own build directory -
+# see the wiki's Extending page.
+set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
@@ -95,7 +99,12 @@ if(NOT TARGET glm::glm)
 endif()
 
 include(FetchContent)
-set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/external" CACHE PATH "" FORCE)
+# CMAKE_CURRENT_SOURCE_DIR, not CMAKE_SOURCE_DIR: this file is meant to be
+# add_subdirectory()'d by a consumer (see the wiki's Extending page), and
+# CMAKE_SOURCE_DIR would then resolve to the CONSUMER's top-level project
+# directory, not this one - external/ needs to land inside this repo
+# regardless of who includes it.
+set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external" CACHE PATH "" FORCE)
 
 # --- EnTT (header-only, vendored via FetchContent into external/, pinned tag) ---
 # Always fetched: keel::World (src/shared/World.h) wraps it and the client
@@ -158,46 +167,95 @@ if(KEEL_VK_IMGUI)
   target_link_libraries(imgui PUBLIC volk::volk SDL3::SDL3)
 endif()
 
-set(KEEL_VK_CLIENT_SOURCES
-  src/client/main.cpp
-  src/client/ActionMap.cpp
-  src/client/Config.cpp
+# --- keel-vk-core: layer 0, simple-vk's bootstrap absorbed and tightened.
+# Generic Vulkan/SDL setup only - window, instance/device, swapchain,
+# shader loading, the VMA implementation unit. Knows nothing about what
+# gets drawn. See the wiki's Architecture page. ---
+add_library(keel-vk-core STATIC
   src/keel-vk/Window.cpp
   src/keel-vk/VulkanContext.cpp
   src/keel-vk/Swapchain.cpp
   src/keel-vk/ShaderModule.cpp
   src/keel-vk/VmaImpl.cpp
+)
+
+# PUBLIC: every one of these defines changes how a header a consumer
+# includes (Renderer.h pulls in vk_mem_alloc.h directly, volk.h needs
+# VK_NO_PROTOTYPES seen consistently everywhere it's included, and on
+# Windows any translation unit reaching windows.h transitively needs
+# NOMINMAX or std::max/min break) - a consumer linking keel must see the
+# same defines this library was built with, not silently different ones.
+target_compile_definitions(keel-vk-core PUBLIC
+  VK_NO_PROTOTYPES               # all Vulkan entry points come from volk
+  VMA_STATIC_VULKAN_FUNCTIONS=0
+  VMA_DYNAMIC_VULKAN_FUNCTIONS=1
+  $<$<PLATFORM_ID:Windows>:NOMINMAX>
+  $<$<PLATFORM_ID:Windows>:WIN32_LEAN_AND_MEAN>
+)
+# PRIVATE: only gates behavior inside this library's own .cpp files
+# (validation layers, debug messenger); nothing a consumer's headers read.
+target_compile_definitions(keel-vk-core PRIVATE
+  $<$<CONFIG:Debug>:KEEL_VK_DEBUG>
+)
+
+target_compile_options(keel-vk-core PUBLIC
+  $<$<CXX_COMPILER_ID:MSVC>:/W4>
+  $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
+)
+
+# PUBLIC include dir: a consumer includes headers as "keel-vk/Window.h",
+# "renderer/Renderer.h", etc., same paths this repo's own sources use.
+target_include_directories(keel-vk-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+target_link_libraries(keel-vk-core PUBLIC
+  volk::volk
+  GPUOpen::VulkanMemoryAllocator
+  SDL3::SDL3
+)
+
+# --- keel: layer 1, the foundation this repo adds on top of the
+# bootstrap - device contract, texture residency, ECS/net/VFS wraps, the
+# optional debug overlay. This is what a fork links. src/client/main.cpp
+# is deliberately NOT in this library: it's this repo's own cube
+# composition, not something a consumer inherits. ---
+set(KEEL_LIB_SOURCES
   src/renderer/Renderer.cpp
   src/renderer/MeshPool.cpp
   src/renderer/Ktx2.cpp
   src/renderer/TextureStreamer.cpp
   src/renderer/TextureArray2D.cpp
   src/renderer/Atlas2D.cpp
-  src/net/Host.cpp
   src/shared/Vfs.cpp
+  src/net/Host.cpp
+  src/client/Config.cpp
+  src/client/ActionMap.cpp
 )
 if(KEEL_VK_IMGUI)
-  list(APPEND KEEL_VK_CLIENT_SOURCES src/debug/DebugUi.cpp)
+  list(APPEND KEEL_LIB_SOURCES src/debug/DebugUi.cpp)
 endif()
 
-add_executable(keel-vk ${KEEL_VK_CLIENT_SOURCES})
+add_library(keel STATIC ${KEEL_LIB_SOURCES})
 
-target_include_directories(keel-vk PRIVATE src)
-
-target_compile_definitions(keel-vk PRIVATE
-  VK_NO_PROTOTYPES               # all Vulkan entry points come from volk
-  VMA_STATIC_VULKAN_FUNCTIONS=0
-  VMA_DYNAMIC_VULKAN_FUNCTIONS=1
+target_compile_definitions(keel PUBLIC
   KEEL_VK_IMGUI=$<BOOL:${KEEL_VK_IMGUI}>
-  $<$<CONFIG:Debug>:KEEL_VK_DEBUG>    # enables validation layers + debug messenger
-  $<$<PLATFORM_ID:Windows>:NOMINMAX>
-  $<$<PLATFORM_ID:Windows>:WIN32_LEAN_AND_MEAN>
 )
 
-target_compile_options(keel-vk PRIVATE
-  $<$<CXX_COMPILER_ID:MSVC>:/W4>
-  $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
+target_link_libraries(keel PUBLIC
+  keel-vk-core
+  glm::glm
+  EnTT::EnTT
 )
+target_link_libraries(keel PRIVATE enet) # net::Host.h only forward-declares ENet types, so this stays private
+if(KEEL_VK_IMGUI)
+  target_link_libraries(keel PUBLIC imgui) # DebugUi.h's own includes need imgui.h visible to consumers
+endif()
+
+# --- keel-vk: this repo's own contract-test executable. Everything about
+# the hero cube, the satellite ring, and the demo textures lives here or
+# in ContractTest.cpp, never in keel itself - see the wiki's Extending
+# page. ---
+add_executable(keel-vk src/client/main.cpp)
+target_link_libraries(keel-vk PRIVATE keel)
 
 # /INCREMENTAL:NO on Release so MSVC doesn't emit a .ilk next to the
 # shipped exe; incremental linking is a debug-loop convenience only.
@@ -205,32 +263,38 @@ target_link_options(keel-vk PRIVATE
   $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/INCREMENTAL:NO>
 )
 
-target_link_libraries(keel-vk PRIVATE
-  volk::volk
-  GPUOpen::VulkanMemoryAllocator
-  SDL3::SDL3
-  glm::glm
-  EnTT::EnTT
-  enet
-)
-if(KEEL_VK_IMGUI)
-  target_link_libraries(keel-vk PRIVATE imgui)
-endif()
-
 set_target_properties(keel-vk PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
 )
 
-# --- keel-vk-server: headless, no Vulkan/SDL, only the ENet transport ---
+# --- keel-vk-server: headless, no Vulkan/SDL, only the ENet transport.
+# Compiles Host.cpp directly rather than linking keel, which would pull
+# in Vulkan/SDL/glm/EnTT for a program that needs none of it. ---
 add_executable(keel-vk-server src/server/main.cpp src/net/Host.cpp)
 target_include_directories(keel-vk-server PRIVATE src)
 target_link_libraries(keel-vk-server PRIVATE enet)
 set_target_properties(keel-vk-server PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
 )
 target_link_options(keel-vk-server PRIVATE
   $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/INCREMENTAL:NO>
 )
+
+# --- keel_copy_runtime_assets(target): POST_BUILD copy of <caller>/packages
+# next to target's built executable, the same way this repo's own
+# packages/ is copied next to keel-vk below. A consumer that
+# add_subdirectory()s this repo and links keel calls this with their own
+# target name to get the same treatment for their own packages/ - it
+# reads CMAKE_CURRENT_SOURCE_DIR at the call site, not this listfile's,
+# so it resolves the caller's own packages/ directory, not this repo's. ---
+function(keel_copy_runtime_assets target)
+  add_custom_command(TARGET ${target} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_CURRENT_SOURCE_DIR}/packages"
+      "$<TARGET_FILE_DIR:${target}>/packages"
+    COMMENT "Copying packages/ next to the executable"
+  )
+endfunction()
 
 # --- Shader compilation (GLSL -> SPIR-V) ---
 if(TARGET Vulkan::glslc)
@@ -248,7 +312,7 @@ set(SHADER_SOURCES
   shaders/cube.vert
   shaders/cube.frag
 )
-set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin/shaders")
+set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/bin/shaders")
 
 set(SHADER_SPV_FILES "")
 foreach(shader ${SHADER_SOURCES})
@@ -260,8 +324,8 @@ foreach(shader ${SHADER_SOURCES})
     # --target-env=vulkan1.3 so GL_EXT_nonuniform_qualifier and the runtime
     # descriptor array in cube.frag get SPIR-V that actually matches the
     # device contract (descriptor indexing), not the vulkan1.0 default.
-    COMMAND ${GLSLC_COMMAND} --target-env=vulkan1.3 "${CMAKE_SOURCE_DIR}/${shader}" -o "${shader_output}"
-    DEPENDS "${CMAKE_SOURCE_DIR}/${shader}"
+    COMMAND ${GLSLC_COMMAND} --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/${shader}" -o "${shader_output}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${shader}"
     COMMENT "Compiling shader ${shader}"
     VERBATIM
   )
@@ -273,12 +337,7 @@ add_dependencies(keel-vk shaders)
 
 # --- Copy packages/ next to the executable: keel::Vfs mounts it relative
 # to SDL_GetBasePath(), which is the executable's own directory. ---
-add_custom_command(TARGET keel-vk POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/packages"
-    "$<TARGET_FILE_DIR:keel-vk>/packages"
-  COMMENT "Copying packages/ next to the executable"
-)
+keel_copy_runtime_assets(keel-vk)
 
 # --- Windows: copy SDL3.dll next to the built executable ---
 if(WIN32)
