@@ -160,10 +160,14 @@ keel_copy_runtime_assets(mygame)   # copies your own packages/, and this repo's 
 
 `#include` headers the same way this repo's own sources do: `"renderer/Renderer.h"`,
 `"shared/World.h"`, `"client/Config.h"`, and so on - `add_subdirectory`
-puts `keel-vk/src` on your include path. `KEEL_VK_IMGUI` still works
-exactly as it does in this repo (`-DKEEL_VK_IMGUI=OFF` before your own
-`add_subdirectory` call, or set it as a normal CMake option in your own
-listfile before that line).
+puts `keel-vk/src` on your include path. Two thin umbrella headers cover
+the rest without pulling in the renderer: `<keel/keel.hpp>` (`Window`,
+`VulkanContext`, `Swapchain`, the version) and `<keel/foundation.hpp>`
+(`World`, `Vfs`, `Clock`, `Config`, `ActionMap`, `Host`, `Camera`,
+`TextureRef`) - `#include "renderer/Renderer.h"` directly when you
+actually draw. `KEEL_VK_IMGUI` still works exactly as it does in this
+repo (`-DKEEL_VK_IMGUI=OFF` before your own `add_subdirectory` call, or
+set it as a normal CMake option in your own listfile before that line).
 
 `keel_copy_runtime_assets(target)` copies two things next to your built
 exe: your own `packages/` directory (next to your `CMakeLists.txt`, not
