@@ -357,13 +357,30 @@ void Renderer::createMeshPool() {
     // times after construction and must never collide with those two
     // fixed values.
     meshPool_ = std::make_unique<MeshPool>(context_, uploadCommandPool_, uploadTimelineSemaphore_, 3, 8192, 16384,
-                                            sizeof(Vertex));
+                                            sizeof(Vertex), kFramesInFlight);
 }
 
-MeshRange Renderer::allocateMesh(const Vertex* vertices, uint32_t vertexCount, const uint32_t* indices,
-                                  uint32_t indexCount) {
-    activeMesh_ = meshPool_->allocate(vertices, vertexCount, indices, indexCount);
-    return activeMesh_;
+MeshId Renderer::allocateMesh(const Vertex* vertices, uint32_t vertexCount, const uint32_t* indices,
+                               uint32_t indexCount) {
+    activeMeshId_ = meshPool_->allocate(vertices, vertexCount, indices, indexCount).id;
+    hasActiveMesh_ = true;
+    return activeMeshId_;
+}
+
+void Renderer::freeMesh(MeshId id) {
+    meshPool_->free(id);
+}
+
+void Renderer::compactMeshPool() {
+    meshPool_->compact();
+}
+
+uint32_t Renderer::meshPoolLiveCount() const {
+    return meshPool_->liveMeshCount();
+}
+
+VkDeviceSize Renderer::meshPoolFreeBytes() const {
+    return meshPool_->freeListBytes();
 }
 
 void Renderer::setInstances(const std::vector<InstanceDesc>& instances) {
@@ -943,6 +960,11 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, deb
     // they touch. Never blocks: no vkQueueWaitIdle anywhere in this path.
     textureStreamer_->processUploads(cmd);
 
+    // Folds any freeMesh() calls whose GPU-safety delay has elapsed into
+    // the mesh pool's reusable free list. CPU-only, no command buffer
+    // work - see MeshPool::beginFrame.
+    meshPool_->beginFrame();
+
     if (timestampsSupported_) {
         // Reset before write, not read: the corresponding
         // vkGetQueryPoolResults call happens in drawFrame(), after this
@@ -1122,6 +1144,14 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     // Hi-Z, no occlusion query - bounds-only, CPU-side. Stays CPU-side
     // rather than a compute pass at this instance count; see the wiki's
     // Rendering page for the decision and why.
+    // Resolved fresh every frame, never cached: compact() can move a
+    // mesh's data, so a stored MeshRange could go stale - see MeshPool::
+    // resolve and activeMeshId_'s comment in Renderer.h. Falls back to a
+    // zero-valued range (indexCount 0, drawn as nothing) before the first
+    // allocateMesh()/setMesh() call, the same harmless state
+    // default-constructed activeMesh_ used to be.
+    const MeshRange activeMesh = hasActiveMesh_ ? meshPool_->resolve(activeMeshId_) : MeshRange{};
+
     const uint64_t cullStartTicks = SDL_GetPerformanceCounter();
     const Frustum frustum(viewProj);
     auto* commands = static_cast<VkDrawIndexedIndirectCommand*>(frame.indirectMapped);
@@ -1137,13 +1167,13 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
             continue;
         }
         VkDrawIndexedIndirectCommand& command = commands[drawCount];
-        command.indexCount = activeMesh_.indexCount;
+        command.indexCount = activeMesh.indexCount;
         command.instanceCount = 1;
-        command.firstIndex = activeMesh_.indexOffset;
-        command.vertexOffset = static_cast<int32_t>(activeMesh_.vertexOffset);
+        command.firstIndex = activeMesh.indexOffset;
+        command.vertexOffset = static_cast<int32_t>(activeMesh.vertexOffset);
         command.firstInstance = i; // slot index, read back by cube.vert via gl_InstanceIndex
         ++drawCount;
-        triangleCount += activeMesh_.indexCount / 3;
+        triangleCount += activeMesh.indexCount / 3;
     }
     const uint64_t cullEndTicks = SDL_GetPerformanceCounter();
     lastCullTimeMs_ = static_cast<float>(cullEndTicks - cullStartTicks) * 1000.0f /

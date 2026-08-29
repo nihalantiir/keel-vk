@@ -167,8 +167,23 @@ renderer::PipelineSpec pipelineSpec() {
 }
 
 void spawnScene(renderer::Renderer& renderer, keel::Vfs& vfs) {
-    renderer.allocateMesh(kVertices.data(), static_cast<uint32_t>(kVertices.size()), kIndices.data(),
-                           static_cast<uint32_t>(kIndices.size()));
+    const renderer::MeshId cubeMesh =
+        renderer.allocateMesh(kVertices.data(), static_cast<uint32_t>(kVertices.size()), kIndices.data(),
+                               static_cast<uint32_t>(kIndices.size()));
+
+    // Proves MeshPool::free()/compact() actually reclaim and repack space,
+    // not just compile: allocate a disposable scratch mesh (the front
+    // face's own quad, reused whole so its indices stay self-contained)
+    // after the cube, free it, then compact before the first drawFrame() -
+    // trivially satisfying compact()'s "nothing reads the pool yet"
+    // requirement. allocateMesh() makes its own result the active mesh,
+    // so restore the cube afterward - compaction only moves its data,
+    // its MeshId itself stays valid throughout.
+    const renderer::MeshId scratchMesh =
+        renderer.allocateMesh(kVertices.data(), 4, kIndices.data(), 6);
+    renderer.freeMesh(scratchMesh);
+    renderer.compactMeshPool();
+    renderer.setMesh(cubeMesh);
 
     renderer.camera().position = kCameraEye;
     renderer.camera().front = glm::normalize(-kCameraEye);

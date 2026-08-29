@@ -84,11 +84,32 @@ public:
     // Adds geometry to the shared mesh pool and makes it the mesh every
     // instance in setInstances() draws this frame (one shared mesh per
     // draw, not per-instance mesh selection - see the wiki's Rendering
-    // page). Call before the first drawFrame(); MeshPool stays
-    // append-only, static geometry only - see the wiki's Rendering page.
-    MeshRange allocateMesh(const Vertex* vertices, uint32_t vertexCount, const uint32_t* indices,
-                            uint32_t indexCount);
-    void setMesh(MeshRange mesh) { activeMesh_ = mesh; }
+    // page). The returned MeshId is a handle, not a cached offset -
+    // MeshPool::compact() can move a mesh's data, so Renderer always
+    // resolves the active id fresh each frame rather than storing a
+    // MeshRange (see recordCommandBuffer).
+    MeshId allocateMesh(const Vertex* vertices, uint32_t vertexCount, const uint32_t* indices, uint32_t indexCount);
+    void setMesh(MeshId mesh) {
+        activeMeshId_ = mesh;
+        hasActiveMesh_ = true;
+    }
+
+    // Returns id's space to the mesh pool's free list; reusable by a
+    // later allocateMesh() once enough frames have passed (see
+    // MeshPool::free). Drawing activeMeshId_ after freeing it without a
+    // following setMesh() throws - see MeshPool::resolve.
+    void freeMesh(MeshId id);
+
+    // Repacks the mesh pool, eliminating fragmentation free() alone
+    // couldn't reclaim. Caller must guarantee no in-flight frame is still
+    // drawing (e.g. call between drawFrame()s, never from within one) -
+    // see MeshPool::compact's doc comment for why.
+    void compactMeshPool();
+
+    // For the debug overlay - same role as residentBytes()/evictionCount()
+    // below, for the mesh pool instead of texture residency.
+    uint32_t meshPoolLiveCount() const;
+    VkDeviceSize meshPoolFreeBytes() const;
 
     // Replaces whatever setInstances() drew last frame. Renderer only
     // knows how to cull and draw whatever's in this list - what those
@@ -315,11 +336,19 @@ private:
     uint32_t currentFrame_ = 0;
 
     // Geometry lives in the shared mesh pool: one vertex buffer, one
-    // index buffer, subrange allocation. allocateMesh()/setMesh() are the
-    // only way activeMesh_ changes - Renderer's constructor leaves the
-    // pool empty; see the wiki's Extending page for why.
+    // index buffer, subrange allocation with free()/compact(). allocateMesh()/
+    // setMesh() are the only way activeMeshId_ changes - Renderer's
+    // constructor leaves the pool empty; see the wiki's Extending page for
+    // why. Resolved to a MeshRange fresh every recordCommandBuffer() call
+    // rather than cached, since compact() can move a mesh's data.
     std::unique_ptr<MeshPool> meshPool_;
-    MeshRange activeMesh_{};
+    MeshId activeMeshId_{};
+    // False until the first allocateMesh()/setMesh() call: MeshId{}'s
+    // default value (0) is indistinguishable from a real mesh's id, so
+    // this - not activeMeshId_ itself - is what recordCommandBuffer reads
+    // to decide whether resolving it is meaningful yet (drawing before
+    // any geometry exists is a valid, harmless zero-mesh state).
+    bool hasActiveMesh_ = false;
 
     // This frame's instances, set by setInstances(). Pure data Renderer
     // culls and draws; nothing here decides what an instance means.

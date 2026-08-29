@@ -193,6 +193,8 @@ void DebugUi::drawOverlay() {
         ImGui::SliderInt("Atlas rect", &renderer_.atlasRectIndex(), 0,
                           static_cast<int>(renderer_.atlasRectCount()) - 1);
     }
+    ImGui::Text("Mesh pool: %u live, %llu free-list bytes", renderer_.meshPoolLiveCount(),
+                static_cast<unsigned long long>(renderer_.meshPoolFreeBytes()));
 
     ImGui::Separator();
     ImGui::Checkbox("Show ImGui demo window", &showDemoWindow_);
