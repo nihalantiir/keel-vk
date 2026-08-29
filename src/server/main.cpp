@@ -2,6 +2,8 @@
 // server once keel-net grows beyond this transport-only wrap.
 #include "../net/Host.h"
 
+#include <keel/Version.h>
+
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -10,7 +12,7 @@
 
 int main() {
     try {
-        std::cout << "keel-vk-server: working (v0.7.0)" << std::endl;
+        std::cout << "keel-vk-server: working (v" << keel::kVersionString << ")" << std::endl;
 
         if (!net::Host::initialize()) {
             throw std::runtime_error("Failed to initialize ENet");

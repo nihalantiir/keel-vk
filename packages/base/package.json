@@ -1,5 +1,6 @@
 {
-    "name": "base",
+    "name": "keel-vk-template-base",
     "version": "0.1.0",
-    "engineProtocol": 1
+    "engineProtocol": 1,
+    "description": "Template starter package (checker texture, BC7 fixture) for keel-vk's own contract test. A fork replaces this with its own package."
 }

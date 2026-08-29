@@ -167,6 +167,15 @@ if(KEEL_VK_IMGUI)
   target_link_libraries(imgui PUBLIC volk::volk SDL3::SDL3)
 endif()
 
+# --- Generated keel/Version.h: this project()'s own version, as
+# compile-time constants, so a window title or overlay string can never
+# drift from what CMake itself thinks this is being built as. ---
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/keel-vk/Version.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/keel/Version.h"
+  @ONLY
+)
+
 # --- keel-vk-core: layer 0, simple-vk's bootstrap absorbed and tightened.
 # Generic Vulkan/SDL setup only - window, instance/device, swapchain,
 # shader loading, the VMA implementation unit. Knows nothing about what
@@ -203,9 +212,13 @@ target_compile_options(keel-vk-core PUBLIC
   $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
 )
 
-# PUBLIC include dir: a consumer includes headers as "keel-vk/Window.h",
-# "renderer/Renderer.h", etc., same paths this repo's own sources use.
-target_include_directories(keel-vk-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# PUBLIC include dirs: a consumer includes headers as "keel-vk/Window.h",
+# "renderer/Renderer.h", etc., same paths this repo's own sources use,
+# plus the generated "keel/Version.h" above.
+target_include_directories(keel-vk-core PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated"
+)
 
 target_link_libraries(keel-vk-core PUBLIC
   volk::volk
@@ -279,7 +292,7 @@ set_target_properties(keel-vk PROPERTIES
 # Compiles Host.cpp directly rather than linking keel, which would pull
 # in Vulkan/SDL/glm/EnTT for a program that needs none of it. ---
 add_executable(keel-vk-server src/server/main.cpp src/net/Host.cpp)
-target_include_directories(keel-vk-server PRIVATE src)
+target_include_directories(keel-vk-server PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(keel-vk-server PRIVATE enet)
 set_target_properties(keel-vk-server PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"

@@ -11,6 +11,8 @@
 #include "Config.h"
 #include "ContractTest.h"
 
+#include <keel/Version.h>
+
 #if KEEL_VK_IMGUI
 #include "../debug/DebugUi.h"
 #endif
@@ -21,6 +23,7 @@
 #include <exception>
 #include <iostream>
 #include <memory>
+#include <string>
 
 int main(int argc, char** argv) {
     try {
@@ -40,7 +43,8 @@ int main(int argc, char** argv) {
                        << std::endl;
         }
 
-        keel::Window window("keel-vk: working (v0.7.0)", config.windowWidth, config.windowHeight);
+        keel::Window window("keel-vk: working (v" + std::string(keel::kVersionString) + ")", config.windowWidth,
+                             config.windowHeight);
         keel::Vfs vfs(config.packageRootOverride); // mounts packages/ next to the executable, or the override
         keel::VulkanContext context(window);
         keel::Swapchain swapchain(context, window, client::toVkPresentMode(config.presentModePreference));

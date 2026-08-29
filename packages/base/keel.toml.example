@@ -1,0 +1,23 @@
+# Example client::Config file (see src/client/Config.h and the wiki's
+# Build page). Not loaded from here: copy this next to the built
+# executable and rename it to keel.toml (or write the same keys as JSON
+# into keel.json) for it to take effect. Every key below is optional -
+# omit any you don't want to override; defaults and CLI arguments still
+# apply on top, in that order.
+
+# window_width = 1280
+# window_height = 720
+
+# "mailbox" (default), "fifo", or "immediate". A preference, not a
+# guarantee: falls back to mailbox, then fifo, if the surface doesn't
+# support the requested mode.
+# present_mode = "mailbox"
+
+# Empty (the default) means <SDL_GetBasePath()>packages/. Set this to
+# mount packages from somewhere else instead.
+# package_root = ""
+
+# Setting connect_address also implies --connect: the client stays idle
+# over the network unless this (or the --connect CLI flag) is set.
+# connect_address = "127.0.0.1"
+# connect_port = 7777
