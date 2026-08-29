@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-08-29
+
+A consumer that `add_subdirectory()`s this repo gets `keel` and nothing
+else, and supplies its own shaders. This is the close: past this
+release, this repo only takes bugfixes.
+
+### Added
+
+- `KEEL_VK_BUILD_APPS` CMake option: gates building `keel-vk` and
+  `keel-vk-server` (this repo's own contract-test executable and
+  headless stub). Defaults ON only when this repo is the top-level
+  project; OFF whenever it's `add_subdirectory()`'d, so a consumer
+  linking `keel` no longer inherits this repo's own binaries unless it
+  explicitly opts in.
+- `renderer::PipelineSpec`: `Renderer`'s pipeline shader paths are now a
+  required constructor argument instead of hardcoded to
+  `shaders/cube.vert.spv`/`shaders/cube.frag.spv`. The pipeline's shape
+  (vertex layout, descriptor sets, dynamic rendering formats) stays
+  fixed; only which compiled shaders it loads is a consumer's own
+  choice. This repo's own `ContractTest::pipelineSpec()` picks the cube
+  shaders.
+
+### Changed
+
+- `keel_copy_runtime_assets(target)` no longer copies this repo's
+  compiled shaders to every caller - only a consumer's own `packages/`.
+  `keel-vk` copies its own cube shaders separately, next to itself only.
+- `Renderer::registerDemoTexture()`/`registerDemoTextureCompressed()`
+  renamed to `registerTexture()`/`registerTextureCompressed()` - "demo"
+  never meant anything to a consumer.
+- Wiki caught up across Home, Architecture, Rendering, Extending, and
+  Troubleshooting: `KEEL_VK_BUILD_APPS`, the pluggable pipeline, and the
+  rename are documented; stale claims that a consumer inherits this
+  repo's executables or its compiled shaders are gone.
+
 ## [0.8.0] - 2026-08-29
 
 A stranger can start a new repo on Keel in one sitting without editing
