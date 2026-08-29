@@ -9,6 +9,7 @@
 #include "../shared/World.h"
 #include "ActionMap.h"
 #include "Config.h"
+#include "ContractTest.h"
 
 #if KEEL_VK_IMGUI
 #include "../debug/DebugUi.h"
@@ -43,7 +44,8 @@ int main(int argc, char** argv) {
         keel::Vfs vfs(config.packageRootOverride); // mounts packages/ next to the executable, or the override
         keel::VulkanContext context(window);
         keel::Swapchain swapchain(context, window, client::toVkPresentMode(config.presentModePreference));
-        renderer::Renderer renderer(context, swapchain, window, vfs);
+        renderer::Renderer renderer(context, swapchain, window);
+        contract_test::spawnScene(renderer, vfs);
 #if KEEL_VK_IMGUI
         debug::DebugUi debugUi(context, swapchain, window, renderer);
 #endif
@@ -139,7 +141,8 @@ int main(int argc, char** argv) {
             const keel::Transform& currentTransform = world.getComponent<keel::Transform>(cube);
             const keel::Transform renderTransform =
                 keel::lerp(previousTransform, currentTransform, fixedClock.alpha());
-            renderer.setModel(keel::toMatrix(renderTransform));
+            renderer.setInstances(
+                contract_test::buildInstances(renderer, keel::toMatrix(renderTransform), simTimeSeconds));
 
 #if KEEL_VK_IMGUI
             debugUi.beginFrame(axes.mouseDeltaX, axes.mouseDeltaY, axes.moveX, axes.moveY);

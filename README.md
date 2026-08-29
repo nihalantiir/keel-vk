@@ -114,9 +114,16 @@ keel-vk/
     ├── debug/            Dear ImGui overlay, gated by KEEL_VK_IMGUI (debug only, never the product UI)
     ├── shared/           foundation: keel::World (EnTT), keel::Vfs, shared::FixedClock
     ├── net/              foundation: net::Host, a transport-only ENet wrap
-    ├── client/           contract-test composition: the cube executable (keel-vk)
+    ├── client/           contract-test composition: the cube executable (keel-vk), not part of the keel library
     └── server/           headless transport stub, no Vulkan/SDL dependency
 ```
+
+`src/keel-vk/` builds into the `keel-vk-core` library; `src/frame/`,
+`src/renderer/`, `src/shared/`, `src/net/`, and `src/debug/` build into
+`keel` (which links `keel-vk-core`). `src/client/main.cpp` and
+`src/client/ContractTest.cpp` are `keel-vk`-only: the hero cube, the
+satellite ring, and the demo textures live there, not in either library.
+See "Using Keel from another repo" below.
 
 `src/keel-vk/` is boilerplate, not "the engine": it stays generic and
 never learns about meshes, instances, packs, ENet, or EnTT. `src/frame/`,
@@ -130,8 +137,10 @@ A game built on Keel lives in its *own* repo, not inside this one. See
 Two libraries: `keel-vk-core` (layer 0, the generic Vulkan/SDL bootstrap)
 and `keel` (layer 1, the foundation - renderer, texture residency,
 ECS/net/VFS, the optional debug overlay). `keel` links `keel-vk-core`, so
-linking `keel` is enough for both. `src/client/main.cpp` (the cube
-executable) is not part of either library.
+linking `keel` is enough for both. `src/client/main.cpp` and
+`src/client/ContractTest.cpp` (the hero cube, the satellite ring, the
+demo textures) are not part of either library - they're this repo's own
+contract test.
 
 Get the code into your own repo, either a git submodule or a plain copy:
 
@@ -146,7 +155,7 @@ add_subdirectory(third_party/keel-vk)
 
 add_executable(mygame src/main.cpp)
 target_link_libraries(mygame PRIVATE keel)
-keel_copy_runtime_assets(mygame)   # copies your own packages/ next to mygame's exe
+keel_copy_runtime_assets(mygame)   # copies your own packages/, and this repo's compiled shaders, next to mygame's exe
 ```
 
 `#include` headers the same way this repo's own sources do: `"renderer/Renderer.h"`,
@@ -156,11 +165,22 @@ exactly as it does in this repo (`-DKEEL_VK_IMGUI=OFF` before your own
 `add_subdirectory` call, or set it as a normal CMake option in your own
 listfile before that line).
 
-`keel_copy_runtime_assets(target)` reads your own `packages/` directory
-(next to your `CMakeLists.txt`), not this repo's - it resolves relative
-to wherever it's called from. `keel::Vfs` throws a hard, resolved-path
-error at startup if that directory doesn't exist next to your built
-exe, so a missing or forgotten copy step fails loudly, not silently.
+`keel_copy_runtime_assets(target)` copies two things next to your built
+exe: your own `packages/` directory (next to your `CMakeLists.txt`, not
+this repo's - it resolves relative to wherever it's called from), and
+this repo's own compiled `cube.vert.spv`/`cube.frag.spv` (the one
+pipeline `renderer::Renderer` builds isn't pluggable yet, so any target
+that constructs a `Renderer` needs them, not just `keel-vk`). Skipping
+either copy fails loudly at your first run - a missing `packages/`
+throws from `keel::Vfs` with the resolved path, a missing shader throws
+from `keel::ShaderModule` - not silently.
+
+A bare `renderer::Renderer` you construct and never populate (no
+`allocateMesh()`, `setInstances()`, or `registerDemoTexture()` calls)
+draws an empty scene: grey clear, 0 instances, no crash. Constructing
+that scene - a mesh, a camera, instances to draw - is on you; see
+[Extending](https://github.com/nihalantiir/keel-vk/wiki/Extending)'s
+"Populating a scene" for the three calls that do it.
 
 See [Extending](https://github.com/nihalantiir/keel-vk/wiki/Extending)
 for the fork checklist: renaming the exe/title/package id, and what

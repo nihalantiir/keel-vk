@@ -239,6 +239,14 @@ add_library(keel STATIC ${KEEL_LIB_SOURCES})
 target_compile_definitions(keel PUBLIC
   KEEL_VK_IMGUI=$<BOOL:${KEEL_VK_IMGUI}>
 )
+# PRIVATE, same as keel-vk-core's own KEEL_VK_DEBUG definition: gates
+# behavior inside this library's own .cpp files (Renderer.cpp,
+# DebugUi.cpp), nothing a consumer's headers read. Linking keel-vk-core
+# does not propagate its PRIVATE compile definitions here - each target
+# that checks KEEL_VK_DEBUG needs its own copy of this line.
+target_compile_definitions(keel PRIVATE
+  $<$<CONFIG:Debug>:KEEL_VK_DEBUG>
+)
 
 target_link_libraries(keel PUBLIC
   keel-vk-core
@@ -254,7 +262,7 @@ endif()
 # the hero cube, the satellite ring, and the demo textures lives here or
 # in ContractTest.cpp, never in keel itself - see the wiki's Extending
 # page. ---
-add_executable(keel-vk src/client/main.cpp)
+add_executable(keel-vk src/client/main.cpp src/client/ContractTest.cpp)
 target_link_libraries(keel-vk PRIVATE keel)
 
 # /INCREMENTAL:NO on Release so MSVC doesn't emit a .ilk next to the
@@ -286,14 +294,26 @@ target_link_options(keel-vk-server PRIVATE
 # add_subdirectory()s this repo and links keel calls this with their own
 # target name to get the same treatment for their own packages/ - it
 # reads CMAKE_CURRENT_SOURCE_DIR at the call site, not this listfile's,
-# so it resolves the caller's own packages/ directory, not this repo's. ---
+# so it resolves the caller's own packages/ directory, not this repo's.
+#
+# Also copies this repo's own compiled cube.vert.spv/cube.frag.spv next
+# to target: renderer::Renderer::createPipeline() unconditionally loads
+# them (this template's one pipeline isn't pluggable yet - see the wiki's
+# Extending page), so any target that constructs a Renderer needs them
+# next to its own executable, not just next to keel-vk's. Sourced from
+# KEEL_VK_SHADER_OUTPUT_DIR (a CACHE variable, set below, so it's visible
+# here regardless of which directory scope calls this function). ---
 function(keel_copy_runtime_assets target)
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${CMAKE_CURRENT_SOURCE_DIR}/packages"
       "$<TARGET_FILE_DIR:${target}>/packages"
-    COMMENT "Copying packages/ next to the executable"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${KEEL_VK_SHADER_OUTPUT_DIR}"
+      "$<TARGET_FILE_DIR:${target}>/shaders"
+    COMMENT "Copying packages/ and shaders/ next to the executable"
   )
+  add_dependencies(${target} shaders)
 endfunction()
 
 # --- Shader compilation (GLSL -> SPIR-V) ---
@@ -313,6 +333,10 @@ set(SHADER_SOURCES
   shaders/cube.frag
 )
 set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/bin/shaders")
+# CACHE INTERNAL, not a plain variable: keel_copy_runtime_assets() above
+# may be called from a consumer's own directory scope (after
+# add_subdirectory), where a plain variable set here wouldn't be visible.
+set(KEEL_VK_SHADER_OUTPUT_DIR "${SHADER_OUTPUT_DIR}" CACHE INTERNAL "")
 
 set(SHADER_SPV_FILES "")
 foreach(shader ${SHADER_SOURCES})
@@ -333,10 +357,11 @@ foreach(shader ${SHADER_SOURCES})
 endforeach()
 
 add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
-add_dependencies(keel-vk shaders)
 
-# --- Copy packages/ next to the executable: keel::Vfs mounts it relative
-# to SDL_GetBasePath(), which is the executable's own directory. ---
+# --- Copy packages/ and shaders/ next to the executable: keel::Vfs and
+# keel::ShaderModule both mount/load relative to SDL_GetBasePath(), the
+# executable's own directory. Also adds keel-vk's dependency on the
+# shaders custom target. ---
 keel_copy_runtime_assets(keel-vk)
 
 # --- Windows: copy SDL3.dll next to the built executable ---

@@ -6,9 +6,7 @@
 #include "../keel-vk/VkCheck.h"
 #include "../keel-vk/VulkanContext.h"
 #include "../keel-vk/Window.h"
-#include "../shared/Vfs.h"
 #include "Frustum.h"
-#include "Ktx2.h"
 #include "TextureArray2D.h"
 
 #if KEEL_VK_IMGUI
@@ -32,55 +30,6 @@
 namespace renderer {
 
 namespace {
-
-// 24 vertices (4 per face, not shared) so every face gets a flat, uniform
-// hue with no interpolation seams across edges. Faces are wound CCW as seen
-// from outside; the pipeline's frontFace matches that directly (see
-// createPipeline) since the projection's Y-flip affects near and far faces
-// identically and doesn't change which triangles should be culled.
-// uv follows the same (0,0),(1,0),(1,1),(0,1) order as each face's 4
-// vertices, so the checker texture reads as one full tile per face.
-constexpr std::array<Vertex, 24> kVertices = {{
-    // +Z front, hue 0
-    {{-0.5f, -0.5f, 0.5f}, 0.0f, {0.0f, 0.0f}},
-    {{0.5f, -0.5f, 0.5f}, 0.0f, {1.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.5f}, 0.0f, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.5f}, 0.0f, {0.0f, 1.0f}},
-    // -Z back, hue 60
-    {{0.5f, -0.5f, -0.5f}, 60.0f, {0.0f, 0.0f}},
-    {{-0.5f, -0.5f, -0.5f}, 60.0f, {1.0f, 0.0f}},
-    {{-0.5f, 0.5f, -0.5f}, 60.0f, {1.0f, 1.0f}},
-    {{0.5f, 0.5f, -0.5f}, 60.0f, {0.0f, 1.0f}},
-    // +X right, hue 120
-    {{0.5f, -0.5f, 0.5f}, 120.0f, {0.0f, 0.0f}},
-    {{0.5f, -0.5f, -0.5f}, 120.0f, {1.0f, 0.0f}},
-    {{0.5f, 0.5f, -0.5f}, 120.0f, {1.0f, 1.0f}},
-    {{0.5f, 0.5f, 0.5f}, 120.0f, {0.0f, 1.0f}},
-    // -X left, hue 180
-    {{-0.5f, -0.5f, -0.5f}, 180.0f, {0.0f, 0.0f}},
-    {{-0.5f, -0.5f, 0.5f}, 180.0f, {1.0f, 0.0f}},
-    {{-0.5f, 0.5f, 0.5f}, 180.0f, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f, -0.5f}, 180.0f, {0.0f, 1.0f}},
-    // +Y top, hue 240
-    {{-0.5f, 0.5f, -0.5f}, 240.0f, {0.0f, 0.0f}},
-    {{-0.5f, 0.5f, 0.5f}, 240.0f, {1.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.5f}, 240.0f, {1.0f, 1.0f}},
-    {{0.5f, 0.5f, -0.5f}, 240.0f, {0.0f, 1.0f}},
-    // -Y bottom, hue 300
-    {{-0.5f, -0.5f, 0.5f}, 300.0f, {0.0f, 0.0f}},
-    {{-0.5f, -0.5f, -0.5f}, 300.0f, {1.0f, 0.0f}},
-    {{0.5f, -0.5f, -0.5f}, 300.0f, {1.0f, 1.0f}},
-    {{0.5f, -0.5f, 0.5f}, 300.0f, {0.0f, 1.0f}},
-}};
-
-constexpr std::array<uint32_t, 36> kIndices = {{
-    0, 1, 2, 0, 2, 3,       // +Z
-    4, 5, 6, 4, 6, 7,       // -Z
-    8, 9, 10, 8, 10, 11,    // +X
-    12, 13, 14, 12, 14, 15, // -X
-    16, 17, 18, 16, 18, 19, // +Y
-    20, 21, 22, 20, 22, 23, // -Y
-}};
 
 // Per-object data (model matrix, texture index) lives in the instance
 // SSBO; only camera- and time-derived values that are the same for
@@ -106,22 +55,6 @@ struct GpuInstance {
     uint32_t visible;
     uint32_t generation;
 };
-
-// Local-space bounding sphere radius for the 1x1x1 cube (half-extent 0.5
-// on every axis): sqrt(3 * 0.5^2). Rotation doesn't change a sphere's
-// radius, so this stays constant regardless of the cube's current
-// orientation; only a non-uniform scale would invalidate it.
-constexpr float kCubeBoundsRadius = 0.8660254f;
-
-// A ring of small cubes around the hero, not gameplay - population for
-// the CPU frustum cull to actually reject something. Radius/count/speed
-// are picked to sit at the edge of the default camera's ~45-degree FOV,
-// so dollying in (see Renderer::cameraDistance()) visibly starts culling
-// some of them without needing any other control.
-constexpr uint32_t kSatelliteCount = 12;
-constexpr float kSatelliteRingRadius = 1.8f;
-constexpr float kSatelliteOrbitDegPerSec = 8.0f;
-constexpr float kSatelliteScale = 0.35f;
 
 struct DeviceMemoryBudget {
     VkDeviceSize budgetBytes = 0;
@@ -150,27 +83,6 @@ DeviceMemoryBudget queryDeviceLocalBudget(keel::VulkanContext& context) {
     return result;
 }
 
-// 8x8 checkerboard, loaded from the base content pack as raw RGBA8 bytes:
-// no image-loading dependency (see the wiki's Libraries page - stb_image
-// is deliberately not used), just a format known ahead of time.
-constexpr uint32_t kCheckerSize = 8;
-
-std::array<uint8_t, kCheckerSize * kCheckerSize * 4> loadCheckerPixels(keel::Vfs& vfs) {
-    const std::string path = vfs.resolve("textures/checker.rgba8");
-
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open checker texture: " + path);
-    }
-
-    std::array<uint8_t, kCheckerSize * kCheckerSize * 4> pixels{};
-    file.read(reinterpret_cast<char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
-    if (file.gcount() != static_cast<std::streamsize>(pixels.size())) {
-        throw std::runtime_error("Checker texture has the wrong size: " + path);
-    }
-    return pixels;
-}
-
 glm::vec3 hsv2rgb(float hueDegrees, float saturation, float value) {
     const float h = std::fmod(std::fmod(hueDegrees, 360.0f) + 360.0f, 360.0f) / 60.0f;
     const float c = value * saturation;
@@ -185,39 +97,11 @@ glm::vec3 hsv2rgb(float hueDegrees, float saturation, float value) {
     return rgb + glm::vec3(value - c);
 }
 
-// Demo content for the bindless streaming path: generated, not loaded, so
-// TextureStreamer::allocate()/update() have more than one real texture to
-// cycle between without needing more content-pack assets.
-std::vector<uint8_t> makeStripePattern(uint32_t width, uint32_t height) {
-    std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4);
-    for (uint32_t y = 0; y < height; ++y) {
-        for (uint32_t x = 0; x < width; ++x) {
-            const bool light = (x / 2) % 2 == 0;
-            const uint8_t value = light ? 235 : 60;
-            uint8_t* px = pixels.data() + (static_cast<size_t>(y) * width + x) * 4;
-            px[0] = value;
-            px[1] = static_cast<uint8_t>(value * 0.6f);
-            px[2] = static_cast<uint8_t>(value * 0.9f);
-            px[3] = 255;
-        }
-    }
-    return pixels;
-}
-
-std::vector<uint8_t> makeGradientPattern(uint32_t width, uint32_t height) {
-    std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4);
-    for (uint32_t y = 0; y < height; ++y) {
-        for (uint32_t x = 0; x < width; ++x) {
-            uint8_t* px = pixels.data() + (static_cast<size_t>(y) * width + x) * 4;
-            px[0] = static_cast<uint8_t>(255.0f * x / static_cast<float>(width - 1));
-            px[1] = static_cast<uint8_t>(255.0f * y / static_cast<float>(height - 1));
-            px[2] = 200;
-            px[3] = 255;
-        }
-    }
-    return pixels;
-}
-
+// Used by regenerateActiveTexture()/freeAndReallocateSpareTexture() below
+// to give the overlay's demo controls something to write - a small,
+// generic pixel generator, not contract-test content itself (compare
+// src/client/ContractTest.cpp's checker/stripes/gradient generators,
+// which are).
 std::vector<uint8_t> makeSolidPattern(uint32_t width, uint32_t height, uint8_t r, uint8_t g, uint8_t b) {
     std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4);
     for (size_t i = 0; i < pixels.size(); i += 4) {
@@ -231,14 +115,16 @@ std::vector<uint8_t> makeSolidPattern(uint32_t width, uint32_t height, uint8_t r
 
 } // namespace
 
-Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window, keel::Vfs& vfs)
-    : context_(context), swapchain_(swapchain), window_(window), vfs_(vfs) {
-    // Fixed direction, not input-driven: the stock cube has no camera
-    // controller (see the wiki's Extending page). Same eye point simple-vk's
-    // old lookAt used. cameraDistance_ (a debug "dolly" slider, see
-    // recordWorldPass) scales along this direction every frame; the
-    // direction itself never changes.
-    camera_.position = glm::vec3(2.2f, 1.8f, 2.6f);
+Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window)
+    : context_(context), swapchain_(swapchain), window_(window) {
+    // Generic default: looking at the origin from a fixed distance along
+    // +Z, no input-driven controller (see the wiki's Extending page).
+    // Not tuned for any particular scene - src/client/ sets its own eye
+    // point through the same public camera()/cameraDistance() accessors
+    // the debug overlay already uses. cameraDistance_ (a debug "dolly"
+    // slider, see recordWorldPass) scales along cameraHomeDirection_
+    // every frame; the direction itself never changes here.
+    camera_.position = glm::vec3(0.0f, 0.0f, 3.0f);
     camera_.front = glm::normalize(-camera_.position);
     cameraHomeDirection_ = glm::normalize(camera_.position);
     cameraDistance_ = glm::length(camera_.position);
@@ -249,24 +135,17 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
     createSyncObjects();
     createTimestampPool();
     createUploadTimelineSemaphore();
-    createMeshPool();          // signals uploadTimelineSemaphore_ to 1 (the cube mesh's only allocate() call)
+    createMeshPool();          // empty until a caller's allocateMesh() call
     createInstanceResources();
-    createTextureStreamer();   // signals uploadTimelineSemaphore_ to 2
+    createTextureStreamer();   // just the streamer's own resident default; no demo content preloaded
     textureArray_ =
-        std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16, uploadTimelineSemaphore_, 3);
-    // "hello", 5 glyph-shaped placeholder rects: proves the shelf packer
-    // and UV table without needing real glyph rendering yet.
-    {
-        const auto swatchA = makeSolidPattern(12, 20, 235, 90, 90);
-        const auto swatchB = makeSolidPattern(10, 20, 90, 200, 235);
-        const auto swatchC = makeSolidPattern(14, 20, 235, 210, 90);
-        const std::vector<AtlasEntry> entries = {
-            {12, 20, swatchA.data()},
-            {10, 20, swatchB.data()},
-            {14, 20, swatchC.data()},
-        };
-        atlas_ = std::make_unique<Atlas2D>(context_, uploadCommandPool_, 256, entries, uploadTimelineSemaphore_, 4);
-    }
+        std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16, uploadTimelineSemaphore_, 1);
+    // Empty by default: no entries packed, atlasRect() returns AtlasRect{}
+    // until src/client/ registers something worth an atlas page. The
+    // shelf packer and UV table still exist and still work - see the
+    // wiki's Extending page for how a fork would add content here.
+    atlas_ = std::make_unique<Atlas2D>(context_, uploadCommandPool_, 256, std::vector<AtlasEntry>{},
+                                        uploadTimelineSemaphore_, 2);
     createResidencyDescriptorSet();
     createDepthTarget();
     createPipeline();
@@ -305,9 +184,6 @@ Renderer::~Renderer() {
     meshPool_.reset();
 
     destroySyncObjects();
-    if (startupTextureUploadCmd_ != VK_NULL_HANDLE) {
-        vkFreeCommandBuffers(context_.device(), uploadCommandPool_, 1, &startupTextureUploadCmd_);
-    }
     if (uploadTimelineSemaphore_ != VK_NULL_HANDLE) {
         vkDestroySemaphore(context_.device(), uploadTimelineSemaphore_, nullptr);
     }
@@ -470,14 +346,30 @@ VkBuffer createMappedBuffer(keel::VulkanContext& context, VkDeviceSize size, VkB
 } // namespace
 
 void Renderer::createMeshPool() {
-    // Capacity is a scaffold, not a measurement: comfortably more than the
-    // one cube mesh currently allocated, so MeshPool::allocate has real
-    // room to demonstrate subrange allocation instead of exactly fitting
-    // one caller.
-    meshPool_ = std::make_unique<MeshPool>(context_, uploadCommandPool_, uploadTimelineSemaphore_, 1, 8192, 16384,
+    // Capacity is a scaffold, not a measurement: room for more than a
+    // single small mesh, so MeshPool::allocate has real headroom to
+    // demonstrate subrange allocation rather than exactly fitting one
+    // caller. Empty until a caller's allocateMesh() call - see the wiki's
+    // Extending page. firstSignalValue starts at 3, strictly after
+    // kResidencyConstructionUploadCount (TextureArray2D=1, Atlas2D=2 -
+    // see Renderer.h), since allocateMesh() may be called any number of
+    // times after construction and must never collide with those two
+    // fixed values.
+    meshPool_ = std::make_unique<MeshPool>(context_, uploadCommandPool_, uploadTimelineSemaphore_, 3, 8192, 16384,
                                             sizeof(Vertex));
-    cubeMesh_ = meshPool_->allocate(kVertices.data(), static_cast<uint32_t>(kVertices.size()), kIndices.data(),
-                                     static_cast<uint32_t>(kIndices.size()));
+}
+
+MeshRange Renderer::allocateMesh(const Vertex* vertices, uint32_t vertexCount, const uint32_t* indices,
+                                  uint32_t indexCount) {
+    activeMesh_ = meshPool_->allocate(vertices, vertexCount, indices, indexCount);
+    return activeMesh_;
+}
+
+void Renderer::setInstances(const std::vector<InstanceDesc>& instances) {
+    if (instances.size() > kMaxInstances) {
+        throw std::runtime_error("Renderer::setInstances: exceeds kMaxInstances");
+    }
+    instances_ = instances;
 }
 
 void Renderer::createInstanceResources() {
@@ -574,89 +466,29 @@ void Renderer::createTextureStreamer() {
     // descriptor set layout the device can't allocate.
     bindlessCapacity_ = std::min(kMaxBindlessTextures, context_.maxBindlessSampledImages());
     textureStreamer_ = std::make_unique<TextureStreamer>(context_, commandPool_, bindlessCapacity_, kFramesInFlight);
+    // No demo content preloaded: registerDemoTexture()/registerDemoTextureCompressed()
+    // are how a caller adds any. Even the streamer's own resident default
+    // (slot 0, queued inside TextureStreamer's constructor) isn't flushed
+    // here with a special one-time command buffer - the normal per-frame
+    // processUploads() call in recordCommandBuffer, which always runs
+    // before anything that might sample a slot, covers it exactly the
+    // same way it covers every later allocate()/update()/free() call.
+}
 
-    // Demo content so the overlay's texture-slot control has more than one
-    // real texture to cycle between. Slot 0 (the streamer's own resident
-    // default) is deliberately not in this list. demoTextureBytes_ and
-    // demoTextureLastUsedFrame_ stay parallel to demoTextures_ - see
-    // maybeEvictDemoTexture().
-    const std::array<uint8_t, kCheckerSize * kCheckerSize * 4> checkerPixels = loadCheckerPixels(vfs_);
-    demoTextures_.push_back(
-        textureStreamer_->allocate(kCheckerSize, kCheckerSize, checkerPixels.data(), "checker (packages/base)"));
-    demoTextureBytes_.push_back(static_cast<VkDeviceSize>(kCheckerSize) * kCheckerSize * 4);
+TextureHandle Renderer::registerDemoTexture(uint32_t width, uint32_t height, const void* pixelsRgba8,
+                                             const char* debugName) {
+    demoTextures_.push_back(textureStreamer_->allocate(width, height, pixelsRgba8, debugName));
+    demoTextureBytes_.push_back(static_cast<VkDeviceSize>(width) * height * 4);
+    demoTextureLastUsedFrame_.push_back(demoTextures_.size() - 1); // deterministic creation order, ties break by insertion
+    return demoTextures_.back();
+}
 
-    const std::vector<uint8_t> stripes = makeStripePattern(16, 16);
-    demoTextures_.push_back(textureStreamer_->allocate(16, 16, stripes.data(), "stripes (generated)"));
-    demoTextureBytes_.push_back(16 * 16 * 4);
-
-    const std::vector<uint8_t> gradient = makeGradientPattern(16, 16);
-    demoTextures_.push_back(textureStreamer_->allocate(16, 16, gradient.data(), "gradient (generated)"));
-    demoTextureBytes_.push_back(16 * 16 * 4);
-
-    const std::vector<uint8_t> spare = makeSolidPattern(8, 8, 200, 200, 200);
-    demoTextures_.push_back(textureStreamer_->allocate(8, 8, spare.data(), "spare (generated)"));
-    demoTextureBytes_.push_back(8 * 8 * 4);
-
-    // The one cooked-format fixture: BC7, read from a real KTX2 container
-    // (see Ktx2.h) instead of the raw-bytes-known-ahead-of-time trick the
-    // RGBA8 demo textures above use. Lands in the same bindless rotation
-    // as everything else - sampling is format-agnostic once the image is
-    // resident, so no shader change was needed to add this.
-    const renderer::Ktx2Image bc7Fixture = renderer::loadKtx2(vfs_.resolve("textures/demo_bc7.ktx2"));
-    if (bc7Fixture.format != VK_FORMAT_BC7_UNORM_BLOCK) {
-        throw std::runtime_error("demo_bc7.ktx2: expected VK_FORMAT_BC7_UNORM_BLOCK");
-    }
-    demoTextures_.push_back(textureStreamer_->allocateCompressed(bc7Fixture.width, bc7Fixture.height,
-                                                                   bc7Fixture.format, bc7Fixture.data.data(),
-                                                                   bc7Fixture.data.size(), "demo (BC7, packages/base)"));
-    demoTextureBytes_.push_back(static_cast<VkDeviceSize>(bc7Fixture.data.size()));
-
-    demoTextureLastUsedFrame_.assign(demoTextures_.size(), 0);
-    for (size_t i = 0; i < demoTextureLastUsedFrame_.size(); ++i) {
-        demoTextureLastUsedFrame_[i] = i; // deterministic creation order, ties break by insertion
-    }
-
-    // One-time startup flush: everything queued above needs to be resident
-    // before the first frame draws, and there is no earlier frame's command
-    // buffer to defer to. Signals uploadTimelineSemaphore_ to value 2
-    // (value 1 is MeshPool's cube-mesh upload, see createMeshPool)
-    // instead of blocking the CPU with vkQueueWaitIdle; Renderer's first
-    // drawFrame() waits for the shared timeline on the GPU side before
-    // that frame's own submission runs (see needsUploadTimelineWait_).
-    // Every later allocate()/update()/free() during the running app is
-    // still drained by processUploads() inside the normal per-frame
-    // command buffer instead (see recordCommandBuffer). Runs on the
-    // graphics queue, same as everything else (see VulkanContext::
-    // uploadQueue()).
-    VkCommandBufferAllocateInfo cmdAllocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cmdAllocInfo.commandPool = uploadCommandPool_;
-    cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cmdAllocInfo.commandBufferCount = 1;
-    keel::vkCheck(vkAllocateCommandBuffers(context_.device(), &cmdAllocInfo, &startupTextureUploadCmd_),
-                  "Failed to allocate startup texture upload command buffer");
-
-    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    keel::vkCheck(vkBeginCommandBuffer(startupTextureUploadCmd_, &beginInfo),
-                  "Failed to begin startup texture upload command buffer");
-    textureStreamer_->processUploads(startupTextureUploadCmd_);
-    keel::vkCheck(vkEndCommandBuffer(startupTextureUploadCmd_), "Failed to end startup texture upload command buffer");
-
-    VkCommandBufferSubmitInfo cmdSubmitInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    cmdSubmitInfo.commandBuffer = startupTextureUploadCmd_;
-    VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    signalInfo.semaphore = uploadTimelineSemaphore_;
-    signalInfo.value = 2;
-    signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    submitInfo.commandBufferInfoCount = 1;
-    submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
-    submitInfo.signalSemaphoreInfoCount = 1;
-    submitInfo.pSignalSemaphoreInfos = &signalInfo;
-    keel::vkCheck(vkQueueSubmit2(context_.uploadQueue(), 1, &submitInfo, VK_NULL_HANDLE),
-                  "Failed to submit startup texture upload");
-    // startupTextureUploadCmd_ is freed in ~Renderer(), after
-    // vkDeviceWaitIdle guarantees this submission has long since completed.
+TextureHandle Renderer::registerDemoTextureCompressed(uint32_t width, uint32_t height, VkFormat format,
+                                                        const void* data, size_t dataSize, const char* debugName) {
+    demoTextures_.push_back(textureStreamer_->allocateCompressed(width, height, format, data, dataSize, debugName));
+    demoTextureBytes_.push_back(static_cast<VkDeviceSize>(dataSize));
+    demoTextureLastUsedFrame_.push_back(demoTextures_.size() - 1);
+    return demoTextures_.back();
 }
 
 void Renderer::createResidencyDescriptorSet() {
@@ -805,16 +637,18 @@ void Renderer::maybeEvictDemoTexture() {
         return;
     }
 
-    // The hero's current Bindless texture is the only protected entry
+    // activeDemoTextureIndex()'s current entry is the only protected one
     // (slot 0, the streamer's own white default, is never in
     // demoTextures_ at all - see createTextureStreamer). Everything else
-    // is eviction-eligible, including whatever a satellite currently
-    // samples: satellites re-derive their index from demoTextures_.size()
-    // every frame, so losing one just reshuffles what they show, no
-    // dangling handle.
-    const bool heroProtects = demoResidencyKind_ == TextureKind::Bindless && activeDemoTextureIndex_ >= 0 &&
-                               static_cast<size_t>(activeDemoTextureIndex_) < demoTextures_.size();
-    const size_t protectedIndex = heroProtects ? static_cast<size_t>(activeDemoTextureIndex_) : demoTextures_.size();
+    // is eviction-eligible; a caller indexing demoTextures_ by position
+    // for its own instances (as ContractTest.cpp's satellites do,
+    // re-deriving their index from demoTextures_.size() every frame)
+    // just sees a reshuffled rotation after an eviction, not a dangling
+    // handle.
+    const bool activeIndexProtects = demoResidencyKind_ == TextureKind::Bindless && activeDemoTextureIndex_ >= 0 &&
+                                      static_cast<size_t>(activeDemoTextureIndex_) < demoTextures_.size();
+    const size_t protectedIndex =
+        activeIndexProtects ? static_cast<size_t>(activeDemoTextureIndex_) : demoTextures_.size();
 
     size_t oldestIndex = demoTextures_.size();
     uint64_t oldestFrame = UINT64_MAX;
@@ -844,6 +678,21 @@ void Renderer::maybeEvictDemoTexture() {
 
 uint32_t Renderer::textureArrayLayerCount() const {
     return textureArray_->layerCount();
+}
+
+uint32_t Renderer::activeDemoTextureSlot() const {
+    const bool hasActive =
+        activeDemoTextureIndex_ >= 0 && activeDemoTextureIndex_ < static_cast<int>(demoTextures_.size());
+    return hasActive ? demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)].slot : 0;
+}
+
+uint32_t Renderer::demoTextureSlotAt(uint32_t index) const {
+    return demoTextures_.empty() ? 0 : demoTextures_[index % demoTextures_.size()].slot;
+}
+
+AtlasRect Renderer::atlasRect(uint32_t index) const {
+    const std::vector<AtlasRect>& rects = atlas_->rects();
+    return rects.empty() ? AtlasRect{} : rects[index % rects.size()];
 }
 
 uint32_t Renderer::atlasRectCount() const {
@@ -1223,118 +1072,46 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     pushConstants.phaseSpeed = phaseSpeedDegPerSec_;
     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants), &pushConstants);
 
-    // model_ is set each frame in main() from a keel::World entity's
-    // Transform (see src/shared/Components.h's toMatrix); Renderer only
-    // consumes it here. Floating origin: model_'s translation is in world
-    // space, so origin has to be subtracted from it the same way camera_
-    // already subtracts it from the eye point in Camera::view(), or the
-    // object and the camera would drift apart as origin moves.
-    const glm::mat4 originAdjustedModel = glm::translate(glm::mat4(1.0f), -camera_.origin) * model_;
-
+    // Demo-texture eviction bookkeeping: marks the overlay's currently
+    // previewed Bindless slot as freshly used, then frees the oldest
+    // unused entry if total demo resident bytes are over the cap. Runs
+    // before the instance-writing loop below so anything indexing
+    // demoTextures_ by position (as ContractTest.cpp's satellites do)
+    // sees the post-eviction state this same frame, not a stale index.
+    // Independent of instances_ - this bookkeeping happens whether or not
+    // anything actually samples that slot this frame.
+    ++frameCounter_;
     const bool hasActiveDemoTexture =
         activeDemoTextureIndex_ >= 0 && activeDemoTextureIndex_ < static_cast<int>(demoTextures_.size());
-    const uint32_t activeSlot = hasActiveDemoTexture
-                                     ? demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)].slot
-                                     : 0; // falls back to the streamer's resident default
-
-    // Write this frame's instances: the hero cube at slot 0, satellites
-    // filling the rest (below). The buffer, cull loop, and compaction are
-    // sized for a larger population than this - see the wiki's Rendering
-    // page for why that scaffolding exists.
-    InstanceFrame& frame = instanceFrames_[static_cast<size_t>(currentFrame_)];
-    auto* instances = static_cast<GpuInstance*>(frame.instanceMapped);
-    instances[0].model = originAdjustedModel;
-    instances[0].boundsCenterRadius = glm::vec4(glm::vec3(originAdjustedModel[3]), kCubeBoundsRadius);
-    // Which of the three residency paths this instance samples, picked by
-    // the debug overlay's "Residency mode" control - visible proof all
-    // three actually work, not just constructed. See TextureRef.h.
-    instances[0].textureKind = static_cast<uint32_t>(demoResidencyKind_);
-    switch (demoResidencyKind_) {
-        case TextureKind::Array: {
-            const uint32_t layerCount = textureArray_->layerCount();
-            const uint32_t layer =
-                layerCount == 0 ? 0 : static_cast<uint32_t>(demoArrayLayer_) % layerCount;
-            instances[0].textureIndex = layer;
-            instances[0].atlasUvRect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
-            break;
-        }
-        case TextureKind::Atlas: {
-            const std::vector<AtlasRect>& rects = atlas_->rects();
-            const AtlasRect& rect =
-                rects.empty() ? AtlasRect{} : rects[static_cast<size_t>(demoAtlasRectIndex_) % rects.size()];
-            instances[0].textureIndex = 0;
-            instances[0].atlasUvRect = glm::vec4(rect.u0, rect.v0, rect.u1, rect.v1);
-            break;
-        }
-        case TextureKind::Bindless:
-        default:
-            instances[0].textureIndex = activeSlot;
-            instances[0].atlasUvRect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
-            break;
-    }
-    instances[0].visible = 1;
-    instances[0].generation = 0;
-
-    // Bindless demo-texture eviction: marks the hero's current Bindless
-    // texture as freshly used, then frees the oldest unused entry if
-    // total demo resident bytes are over the cap. Runs before satellites
-    // reference demoTextures_ below, so they see the post-eviction state
-    // this same frame, not a stale index.
-    ++frameCounter_;
     if (demoResidencyKind_ == TextureKind::Bindless && hasActiveDemoTexture) {
         demoTextureLastUsedFrame_[static_cast<size_t>(activeDemoTextureIndex_)] = frameCounter_;
     }
     maybeEvictDemoTexture();
 
-    // Satellites: a small static ring around the hero, not gameplay,
-    // just enough population for the frustum cull below to reject
-    // something real instead of always seeing exactly one instance. Same
-    // mesh as the hero, smaller scale, cycling through all three
-    // residency kinds round-robin so bindless/array/atlas are all
-    // sampled in one frame regardless of the hero's own Residency mode
-    // picker. See the wiki's Rendering page.
-    for (uint32_t i = 0; i < kSatelliteCount; ++i) {
-        const uint32_t slot = 1 + i;
-        const float baseAngleDeg = static_cast<float>(i) * (360.0f / static_cast<float>(kSatelliteCount));
-        const float angleRad = glm::radians(baseAngleDeg + elapsedTimeSeconds_ * kSatelliteOrbitDegPerSec);
-        const glm::vec3 worldPos(kSatelliteRingRadius * std::cos(angleRad), 0.0f,
-                                  kSatelliteRingRadius * std::sin(angleRad));
-        const glm::mat4 satelliteModel = glm::translate(glm::mat4(1.0f), worldPos - camera_.origin) *
-                                          glm::scale(glm::mat4(1.0f), glm::vec3(kSatelliteScale));
-
-        instances[slot].model = satelliteModel;
-        instances[slot].boundsCenterRadius =
-            glm::vec4(glm::vec3(satelliteModel[3]), kCubeBoundsRadius * kSatelliteScale);
-        instances[slot].visible = 1;
-        instances[slot].generation = 0;
-
-        switch (i % 3) {
-            case 0:
-                instances[slot].textureKind = static_cast<uint32_t>(TextureKind::Bindless);
-                instances[slot].textureIndex = demoTextures_.empty()
-                                                    ? 0
-                                                    : demoTextures_[i % demoTextures_.size()].slot;
-                instances[slot].atlasUvRect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
-                break;
-            case 1: {
-                const uint32_t layerCount = textureArray_->layerCount();
-                instances[slot].textureKind = static_cast<uint32_t>(TextureKind::Array);
-                instances[slot].textureIndex = layerCount == 0 ? 0 : i % layerCount;
-                instances[slot].atlasUvRect = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f);
-                break;
-            }
-            case 2:
-            default: {
-                const std::vector<AtlasRect>& rects = atlas_->rects();
-                const AtlasRect& rect = rects.empty() ? AtlasRect{} : rects[i % rects.size()];
-                instances[slot].textureKind = static_cast<uint32_t>(TextureKind::Atlas);
-                instances[slot].textureIndex = 0;
-                instances[slot].atlasUvRect = glm::vec4(rect.u0, rect.v0, rect.u1, rect.v1);
-                break;
-            }
-        }
+    // Write this frame's instances, exactly as setInstances() last set
+    // them. Renderer doesn't know or care what they represent - see
+    // InstanceDesc's comment and the wiki's Extending page. The buffer,
+    // cull loop, and compaction are sized for a larger population than
+    // any single caller necessarily uses (kMaxInstances) - see the wiki's
+    // Rendering page for why that scaffolding exists.
+    InstanceFrame& frame = instanceFrames_[static_cast<size_t>(currentFrame_)];
+    auto* instances = static_cast<GpuInstance*>(frame.instanceMapped);
+    const uint32_t writtenInstanceCount = static_cast<uint32_t>(instances_.size());
+    for (uint32_t i = 0; i < writtenInstanceCount; ++i) {
+        const InstanceDesc& desc = instances_[i];
+        // desc.model is world-space; origin has to be subtracted from it
+        // the same way camera_ already subtracts it from the eye point in
+        // Camera::view(), or the object and the camera would drift apart
+        // as origin moves.
+        const glm::mat4 originAdjustedModel = glm::translate(glm::mat4(1.0f), -camera_.origin) * desc.model;
+        instances[i].model = originAdjustedModel;
+        instances[i].boundsCenterRadius = glm::vec4(glm::vec3(originAdjustedModel[3]), desc.boundsRadius);
+        instances[i].textureKind = static_cast<uint32_t>(desc.texture.kind);
+        instances[i].textureIndex = desc.texture.index;
+        instances[i].atlasUvRect = desc.texture.atlasUvRect;
+        instances[i].visible = 1;
+        instances[i].generation = 0;
     }
-    const uint32_t writtenInstanceCount = 1 + kSatelliteCount;
 
     // CPU frustum cull against each instance's bounding sphere, compacting
     // surviving draws to the front of the indirect buffer rather than
@@ -1359,13 +1136,13 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
             continue;
         }
         VkDrawIndexedIndirectCommand& command = commands[drawCount];
-        command.indexCount = cubeMesh_.indexCount;
+        command.indexCount = activeMesh_.indexCount;
         command.instanceCount = 1;
-        command.firstIndex = cubeMesh_.indexOffset;
-        command.vertexOffset = static_cast<int32_t>(cubeMesh_.vertexOffset);
+        command.firstIndex = activeMesh_.indexOffset;
+        command.vertexOffset = static_cast<int32_t>(activeMesh_.vertexOffset);
         command.firstInstance = i; // slot index, read back by cube.vert via gl_InstanceIndex
         ++drawCount;
-        triangleCount += cubeMesh_.indexCount / 3;
+        triangleCount += activeMesh_.indexCount / 3;
     }
     const uint64_t cullEndTicks = SDL_GetPerformanceCounter();
     lastCullTimeMs_ = static_cast<float>(cullEndTicks - cullStartTicks) * 1000.0f /
@@ -1451,20 +1228,24 @@ void Renderer::drawFrame(debug::DebugUi* debugUi) {
     waitSemaphoreInfos[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     uint32_t waitSemaphoreCount = 1;
 
-    // Retires the four construction-time GPU uploads (MeshPool's cube
-    // mesh, TextureStreamer, TextureArray2D, Atlas2D - see
-    // createUploadTimelineSemaphore) on the GPU side, once, before the
-    // first frame that might read any of them submits. Every later frame
-    // skips this: the timeline has long since reached its target value,
-    // so there is nothing left to wait on and no reason to keep naming it
-    // in the submit.
-    if (needsUploadTimelineWait_) {
+    // Retires construction-time GPU uploads (TextureArray2D, Atlas2D,
+    // and whatever allocateMesh() has signaled so far - see
+    // kResidencyConstructionUploadCount's comment in Renderer.h) on the
+    // GPU side, once per distinct target value, before a submission that
+    // might read any of them. Recomputed every frame rather than only
+    // once: a setup-time allocateMesh() call can happen any time between
+    // construction and the first drawFrame(), and this way it's covered
+    // regardless of exactly when. Once the target stops growing (the
+    // normal steady state), this adds nothing to the submit.
+    const uint64_t currentUploadTarget =
+        std::max<uint64_t>(kResidencyConstructionUploadCount, meshPool_->lastSignaledUploadValue());
+    if (currentUploadTarget > lastWaitedUploadValue_) {
         waitSemaphoreInfos[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
         waitSemaphoreInfos[1].semaphore = uploadTimelineSemaphore_;
-        waitSemaphoreInfos[1].value = kUploadTimelineTargetValue;
+        waitSemaphoreInfos[1].value = currentUploadTarget;
         waitSemaphoreInfos[1].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         waitSemaphoreCount = 2;
-        needsUploadTimelineWait_ = false;
+        lastWaitedUploadValue_ = currentUploadTarget;
     }
 
     VkSemaphoreSubmitInfo signalSemaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};

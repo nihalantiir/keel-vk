@@ -21,7 +21,6 @@ namespace keel {
 class VulkanContext;
 class Swapchain;
 class Window;
-class Vfs;
 } // namespace keel
 
 namespace debug {
@@ -38,13 +37,42 @@ struct Vertex {
     float uv[2];
 };
 
+// One instance for setInstances() to draw this frame: a world-space
+// transform, a local-space bounding sphere radius (for the CPU frustum
+// cull), and which texture it samples. Pure data - Renderer doesn't know
+// or care what a "hero" or a "satellite" is; that's src/client/'s
+// business (see the wiki's Extending page). model is world-space:
+// Renderer applies the floating-origin subtraction internally, the same
+// way Camera::view() already does for the eye point.
+struct InstanceDesc {
+    glm::mat4 model{1.0f};
+    float boundsRadius = 0.5f;
+    TextureRef texture;
+};
+
 class Renderer {
 public:
-    Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window, keel::Vfs& vfs);
+    Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
+
+    // Adds geometry to the shared mesh pool and makes it the mesh every
+    // instance in setInstances() draws this frame (one shared mesh per
+    // draw, not per-instance mesh selection - see the wiki's Rendering
+    // page). Call before the first drawFrame(); MeshPool stays
+    // append-only, static geometry only - see the wiki's Rendering page.
+    MeshRange allocateMesh(const Vertex* vertices, uint32_t vertexCount, const uint32_t* indices,
+                            uint32_t indexCount);
+    void setMesh(MeshRange mesh) { activeMesh_ = mesh; }
+
+    // Replaces whatever setInstances() drew last frame. Renderer only
+    // knows how to cull and draw whatever's in this list - what those
+    // instances are (a hero cube, a satellite ring, nothing at all) is
+    // entirely src/client/'s business. Throws if instances.size() exceeds
+    // kMaxInstances.
+    void setInstances(const std::vector<InstanceDesc>& instances);
 
     void drawFrame(debug::DebugUi* debugUi = nullptr);
 
@@ -66,11 +94,6 @@ public:
     // used to be two separate clocks and isn't anymore).
     void setSimTime(float seconds) { elapsedTimeSeconds_ = seconds; }
 
-    // The cube's model matrix, extracted from a keel::World entity's
-    // Transform each frame (see src/client/main.cpp). Identity until the
-    // first call.
-    void setModel(const glm::mat4& model) { model_ = model; }
-
     // View/proj source and floating-origin state. Position/front/up are
     // fixed for the stock cube (no input-driven controller yet, see the
     // wiki's Extending page); live-editable by the debug overlay
@@ -91,14 +114,45 @@ public:
     uint32_t bindlessCapacity() const { return bindlessCapacity_; }
     uint32_t boundTextureCount() const { return textureStreamer_->usedSlots(); }
 
+    // Registers a texture into the demo-texture rotation the overlay's
+    // "Cube texture slot" control and eviction (maybeEvictDemoTexture)
+    // operate on. Renderer's constructor registers none of its own -
+    // src/client/ decides what (if anything) goes in here; an empty
+    // rotation is a valid, harmless state (activeDemoTextureSlot() falls
+    // back to the streamer's resident default). Safe to call anytime,
+    // including mid-frame, same as TextureStreamer::allocate() itself.
+    TextureHandle registerDemoTexture(uint32_t width, uint32_t height, const void* pixelsRgba8,
+                                       const char* debugName);
+    TextureHandle registerDemoTextureCompressed(uint32_t width, uint32_t height, VkFormat format,
+                                                 const void* data, size_t dataSize, const char* debugName);
+
+    // The bindless slot activeDemoTextureIndex() currently points at, or
+    // the streamer's resident default (slot 0) if the rotation is empty
+    // or the index is out of range. Use this to fill an InstanceDesc's
+    // TextureRef for whatever a caller wants to call "the hero."
+    uint32_t activeDemoTextureSlot() const;
+
+    // Wraps Atlas2D::rects(), empty-safe: AtlasRect{} if the atlas has no
+    // rects packed. index wraps modulo rects().size(), same as the old
+    // hardcoded satellite loop did.
+    AtlasRect atlasRect(uint32_t index) const;
+
     // Demo controls for the debug overlay: which of demoTextures_ the cube
     // currently samples, a way to prove update() streams live, and a way
     // to prove free()+allocate() cycle a slot's generation. See
-    // Renderer.cpp's createTextureStreamer() for what's registered.
+    // registerDemoTexture() above for what populates demoTextures_.
     int& activeDemoTextureIndex() { return activeDemoTextureIndex_; }
     int demoTextureCount() const { return static_cast<int>(demoTextures_.size()); }
     void regenerateActiveTexture();
     void freeAndReallocateSpareTexture();
+
+    // The bindless slot of the demoTextures_ entry at index (wrapping
+    // modulo demoTextureCount()), or 0 (the streamer's resident default)
+    // if the rotation is empty. Unlike activeDemoTextureSlot() above,
+    // this names an arbitrary position rather than the overlay's current
+    // pick - for a caller round-robining several instances through the
+    // whole registered set, the way ContractTest.cpp's satellites do.
+    uint32_t demoTextureSlotAt(uint32_t index) const;
 
     // Real VK_EXT_memory_budget numbers (see VulkanContext::
     // memoryBudgetSupported), for the overlay's "VRAM" line - purely
@@ -118,9 +172,12 @@ public:
     uint32_t textureArrayLayerCount() const;
     uint32_t atlasRectCount() const;
 
-    // Which residency path the cube's instance names this frame. All
-    // three are visibly sampled by switching this, not just constructed -
-    // see the wiki's Rendering page.
+    // Which residency path the overlay's "Residency mode" control
+    // currently picks - Renderer doesn't read this itself; it's state
+    // for a caller building its own InstanceDesc to consult (see
+    // ContractTest.cpp's hero for the pattern). All three are visibly
+    // sampled by switching this, not just constructed - see the wiki's
+    // Rendering page.
     TextureKind& residencyMode() { return demoResidencyKind_; }
     int& demoArrayLayer() { return demoArrayLayer_; }
     int& demoAtlasRectIndex() { return demoAtlasRectIndex_; }
@@ -167,10 +224,11 @@ private:
     void createUploadTimelineSemaphore();
     void createTextureStreamer();
     void createResidencyDescriptorSet();
-    // Frees the oldest unused entry in demoTextures_ (never the hero's
-    // current TextureRef when it's Bindless-kind) once demoResidentBytes()
-    // exceeds kDemoResidentCapBytes. Called once per frame from
-    // recordWorldPass, before satellites reference demoTextures_ by index.
+    // Frees the oldest unused entry in demoTextures_ (never
+    // activeDemoTextureIndex()'s current entry when residencyMode() is
+    // Bindless-kind) once demoResidentBytes() exceeds kDemoResidentCapBytes.
+    // Called once per frame from recordWorldPass, before anything
+    // indexing demoTextures_ by position for this frame's instances.
     void maybeEvictDemoTexture();
     void createTimestampPool();
     void createDepthTarget();
@@ -198,30 +256,34 @@ private:
     keel::VulkanContext& context_;
     keel::Swapchain& swapchain_;
     keel::Window& window_;
-    keel::Vfs& vfs_;
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers_;
 
     // Same queue family as commandPool_ (see VulkanContext::uploadQueueFamily),
     // kept separate to isolate construction-time one-shot uploads (the
-    // texture streamer's startup flush, the mesh pool, the array, the
-    // atlas) from the per-frame reused command buffers.
+    // mesh pool, the array, the atlas) from the per-frame reused command
+    // buffers.
     VkCommandPool uploadCommandPool_ = VK_NULL_HANDLE;
 
-    // Signaled by each construction-time GPU upload (MeshPool's cube-mesh
-    // allocate(): value 1; TextureStreamer's startup flush: value 2;
-    // TextureArray2D: value 3; Atlas2D: value 4) instead of each one
-    // calling vkQueueWaitIdle. The first frame's graphics-queue submission
-    // waits for value 4 (see needsUploadTimelineWait_ below) so none of
-    // the four can be read before its upload actually lands, without
-    // blocking the CPU during construction.
+    // Signaled by each construction-time GPU upload instead of any of
+    // them calling vkQueueWaitIdle. TextureArray2D and Atlas2D are always
+    // constructed by Renderer itself and always signal 1 and 2
+    // respectively (kResidencyConstructionUploadCount). allocateMesh()
+    // is caller-driven (src/client/, not Renderer's constructor) and may
+    // be called zero or more times after construction, so MeshPool's
+    // firstSignalValue starts at 3 - strictly after the two fixed values
+    // above, so its own calls can never collide with them - and its
+    // highest-signaled value (MeshPool::lastSignaledUploadValue()) is
+    // read fresh on every drawFrame(), not baked in once, so a
+    // setup-time allocateMesh() call is always covered no matter when
+    // relative to the first frame it happens.
     VkSemaphore uploadTimelineSemaphore_ = VK_NULL_HANDLE;
-    static constexpr uint64_t kUploadTimelineTargetValue = 4;
-    bool needsUploadTimelineWait_ = true;
-    // Freed in ~Renderer(), not right after submission: see
-    // createTextureStreamer()'s comment for why.
-    VkCommandBuffer startupTextureUploadCmd_ = VK_NULL_HANDLE;
+    static constexpr uint64_t kResidencyConstructionUploadCount = 2;
+    // The highest upload-timeline value a graphics submission has
+    // already waited for; drawFrame() only adds a wait semaphore when
+    // the current target exceeds this, and bumps it afterward.
+    uint64_t lastWaitedUploadValue_ = 0;
 
     std::vector<VkSemaphore> imageAvailableSemaphores_; // one per frame in flight
     std::vector<VkSemaphore> renderFinishedSemaphores_; // one per swapchain image
@@ -230,19 +292,25 @@ private:
 
     uint32_t currentFrame_ = 0;
 
-    // Cube geometry lives in the shared mesh pool: one vertex buffer, one
-    // index buffer, subrange allocation. Static once uploaded, like the
-    // single dedicated buffers this replaced.
+    // Geometry lives in the shared mesh pool: one vertex buffer, one
+    // index buffer, subrange allocation. allocateMesh()/setMesh() are the
+    // only way activeMesh_ changes - Renderer's constructor leaves the
+    // pool empty; see the wiki's Extending page for why.
     std::unique_ptr<MeshPool> meshPool_;
-    MeshRange cubeMesh_{};
+    MeshRange activeMesh_{};
+
+    // This frame's instances, set by setInstances(). Pure data Renderer
+    // culls and draws; nothing here decides what an instance means.
+    std::vector<InstanceDesc> instances_;
 
     // Per-instance data the World pass reads via an SSBO (set 1), indexed
-    // by gl_InstanceIndex. Capacity (256) is sized well past what's
-    // actually populated (the hero cube plus a small satellite ring, see
-    // the wiki's Rendering page). One buffer pair per frame in flight, like
-    // simple-vk's old per-frame vertex buffers, since CPU writes a new
-    // model/visible/bounds every frame and a previous frame's draw might
-    // still be reading the other copy.
+    // by gl_InstanceIndex. Capacity (256) is a scaffold, not a
+    // measurement - the largest population any of this template's demo
+    // content ever wrote, with headroom, not a hard requirement. One
+    // buffer pair per frame in flight, like simple-vk's old per-frame
+    // vertex buffers, since CPU writes a new model/visible/bounds every
+    // frame and a previous frame's draw might still be reading the other
+    // copy.
     static constexpr uint32_t kMaxInstances = 256;
 
     // The concrete per-slot layout (GpuInstance: model, bounds, texture
@@ -277,11 +345,14 @@ private:
     // pipeline layout and bind at draw time.
     std::unique_ptr<TextureStreamer> textureStreamer_;
     uint32_t bindlessCapacity_ = 0; // set in createTextureStreamer(), see bindlessCapacity()
-    std::vector<TextureHandle> demoTextures_; // slots 1..N: checker, stripes, gradient, spare
+    // Empty until registerDemoTexture()/registerDemoTextureCompressed()
+    // add something - see those methods' comments in Renderer.h.
+    std::vector<TextureHandle> demoTextures_;
     // Parallel to demoTextures_: byte size (for demoResidentBytes()) and
-    // the frame each entry was last the hero's active Bindless texture
-    // (for maybeEvictDemoTexture's oldest-first pick). Kept in lockstep
-    // by every function that grows, shrinks, or replaces demoTextures_.
+    // the frame each entry was last activeDemoTextureIndex()'s pick while
+    // residencyMode() was Bindless-kind (for maybeEvictDemoTexture's
+    // oldest-first pick). Kept in lockstep by every function that grows,
+    // shrinks, or replaces demoTextures_.
     std::vector<VkDeviceSize> demoTextureBytes_;
     std::vector<uint64_t> demoTextureLastUsedFrame_;
     uint64_t frameCounter_ = 0;
@@ -325,9 +396,12 @@ private:
     std::array<bool, kFramesInFlight> timestampSlotReady_{};
 
     float clearColor_[3] = {0.15f, 0.15f, 0.16f};
-    float phaseSpeedDegPerSec_ = 60.0f;
+    // 0: no hue animation until a caller sets phaseSpeed() explicitly.
+    // The animation machinery itself (cube.vert reading Vertex's
+    // baseHueDegrees against time+phaseSpeed) is generic; 60 deg/s was
+    // this repo's own contract-test choice, not a library default.
+    float phaseSpeedDegPerSec_ = 0.0f;
     bool paused_ = false;
-    glm::mat4 model_{1.0f};
     frame::Camera camera_{};
     // Set once in the constructor from the original fixed eye point;
     // cameraDistance_ (below) scales along it every frame in
