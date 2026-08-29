@@ -15,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace keel {
@@ -50,9 +51,31 @@ struct InstanceDesc {
     TextureRef texture;
 };
 
+// The one graphics pipeline Renderer builds: fixed vertex layout (see
+// Vertex above), fixed push-constant/descriptor-set layout, dynamic
+// viewport/scissor, reverse-Z depth - all generic infrastructure, not
+// content. The actual shader files are content, the same way a mesh or
+// a texture is: this repo's own ContractTest.cpp passes
+// "shaders/cube.vert.spv"/"shaders/cube.frag.spv"; a fork passes its
+// own. Both paths resolve the same way keel::ShaderModule always has -
+// relative to SDL_GetBasePath(), never the working directory - and a
+// missing file fails the same way it always did: keel::ShaderModule's
+// "Failed to open shader file: <resolved path>".
+struct PipelineSpec {
+    std::string vertPath;
+    std::string fragPath;
+    const char* vertDebugName = "vertex shader";
+    const char* fragDebugName = "fragment shader";
+};
+
 class Renderer {
 public:
-    Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window);
+    // pipelineSpec is required, not optional: recordWorldPass binds a
+    // pipeline unconditionally every frame, even to draw zero instances,
+    // so there's no meaningful "construct without one" state to fall
+    // back to (see the wiki's Extending page).
+    Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window,
+             const PipelineSpec& pipelineSpec);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
@@ -121,10 +144,9 @@ public:
     // rotation is a valid, harmless state (activeDemoTextureSlot() falls
     // back to the streamer's resident default). Safe to call anytime,
     // including mid-frame, same as TextureStreamer::allocate() itself.
-    TextureHandle registerDemoTexture(uint32_t width, uint32_t height, const void* pixelsRgba8,
-                                       const char* debugName);
-    TextureHandle registerDemoTextureCompressed(uint32_t width, uint32_t height, VkFormat format,
-                                                 const void* data, size_t dataSize, const char* debugName);
+    TextureHandle registerTexture(uint32_t width, uint32_t height, const void* pixelsRgba8, const char* debugName);
+    TextureHandle registerTextureCompressed(uint32_t width, uint32_t height, VkFormat format, const void* data,
+                                             size_t dataSize, const char* debugName);
 
     // The bindless slot activeDemoTextureIndex() currently points at, or
     // the streamer's resident default (slot 0) if the rotation is empty
@@ -140,7 +162,7 @@ public:
     // Demo controls for the debug overlay: which of demoTextures_ the cube
     // currently samples, a way to prove update() streams live, and a way
     // to prove free()+allocate() cycle a slot's generation. See
-    // registerDemoTexture() above for what populates demoTextures_.
+    // registerTexture() above for what populates demoTextures_.
     int& activeDemoTextureIndex() { return activeDemoTextureIndex_; }
     int demoTextureCount() const { return static_cast<int>(demoTextures_.size()); }
     void regenerateActiveTexture();
@@ -233,7 +255,7 @@ private:
     void createTimestampPool();
     void createDepthTarget();
     void destroyDepthTarget();
-    void createPipeline();
+    void createPipeline(const PipelineSpec& spec);
     void loadPipelineCache();
     void savePipelineCache();
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex, debug::DebugUi* debugUi);
@@ -345,7 +367,7 @@ private:
     // pipeline layout and bind at draw time.
     std::unique_ptr<TextureStreamer> textureStreamer_;
     uint32_t bindlessCapacity_ = 0; // set in createTextureStreamer(), see bindlessCapacity()
-    // Empty until registerDemoTexture()/registerDemoTextureCompressed()
+    // Empty until registerTexture()/registerTextureCompressed()
     // add something - see those methods' comments in Renderer.h.
     std::vector<TextureHandle> demoTextures_;
     // Parallel to demoTextures_: byte size (for demoResidentBytes()) and

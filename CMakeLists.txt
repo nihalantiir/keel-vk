@@ -325,25 +325,18 @@ endif()
 # reads CMAKE_CURRENT_SOURCE_DIR at the call site, not this listfile's,
 # so it resolves the caller's own packages/ directory, not this repo's.
 #
-# TEMPORARY: also copies this repo's own compiled cube.vert.spv/cube.frag.spv
-# next to target. This exists only because renderer::Renderer::createPipeline()
-# still hardcodes those two files as of this commit - once Renderer takes
-# its shader paths as a constructor argument instead (see the wiki's
-# Extending page, "Pipeline is data"), a consumer supplies its own
-# shaders and this copy goes away. Sourced from KEEL_VK_SHADER_OUTPUT_DIR
-# (a CACHE variable, set below, so it's visible here regardless of which
-# directory scope calls this function). ---
+# Shaders aren't part of this: Renderer::createPipeline() takes its shader
+# paths as a constructor argument (see renderer::PipelineSpec), so a
+# consumer supplies and copies its own - there's nothing of this repo's
+# to hand them. keel-vk copies its own compiled cube shaders separately,
+# below. ---
 function(keel_copy_runtime_assets target)
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${CMAKE_CURRENT_SOURCE_DIR}/packages"
       "$<TARGET_FILE_DIR:${target}>/packages"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${KEEL_VK_SHADER_OUTPUT_DIR}"
-      "$<TARGET_FILE_DIR:${target}>/shaders"
-    COMMENT "Copying packages/ and shaders/ next to the executable"
+    COMMENT "Copying packages/ next to the executable"
   )
-  add_dependencies(${target} shaders)
 endfunction()
 
 # --- Shader compilation (GLSL -> SPIR-V) ---
@@ -389,11 +382,23 @@ endforeach()
 add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
 
 if(KEEL_VK_BUILD_APPS)
-  # --- Copy packages/ and shaders/ next to the executable: keel::Vfs and
-  # keel::ShaderModule both mount/load relative to SDL_GetBasePath(), the
-  # executable's own directory. Also adds keel-vk's dependency on the
-  # shaders custom target. ---
+  # --- Copy packages/ next to the executable: keel::Vfs mounts relative
+  # to SDL_GetBasePath(), the executable's own directory. ---
   keel_copy_runtime_assets(keel-vk)
+
+  # --- Copy this repo's own compiled cube shaders next to keel-vk:
+  # ContractTest.cpp's pipelineSpec() picks "shaders/cube.vert.spv" and
+  # "shaders/cube.frag.spv", loaded by keel::ShaderModule relative to
+  # SDL_GetBasePath() - the same place packages/ lands above. A consumer
+  # constructing its own Renderer supplies its own PipelineSpec and its
+  # own shaders instead; see the wiki's Extending page. ---
+  add_custom_command(TARGET keel-vk POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${KEEL_VK_SHADER_OUTPUT_DIR}"
+      "$<TARGET_FILE_DIR:keel-vk>/shaders"
+    COMMENT "Copying shaders/ next to the executable"
+  )
+  add_dependencies(keel-vk shaders)
 
   # --- Windows: copy SDL3.dll next to the built executable ---
   if(WIN32)

@@ -19,6 +19,14 @@ namespace contract_test {
 // page. Lives in src/client/ specifically because it's exe-only
 // composition, the same way main.cpp is.
 
+// The cube shaders this contract test draws with. Renderer's pipeline
+// isn't content-agnostic (fixed vertex layout, descriptor sets, dynamic
+// rendering formats - see PipelineSpec's own comment), but the shader
+// files it loads are: this is where this repo picks its own. Call
+// before constructing Renderer; the result is a required constructor
+// argument.
+renderer::PipelineSpec pipelineSpec();
+
 // Allocates the cube mesh, registers the demo bindless/BC7 textures, and
 // sets the camera/phase-speed defaults this contract test is actually
 // tuned for. Call once, after constructing Renderer and before the

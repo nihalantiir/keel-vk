@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
         keel::Vfs vfs(config.packageRootOverride); // mounts packages/ next to the executable, or the override
         keel::VulkanContext context(window);
         keel::Swapchain swapchain(context, window, client::toVkPresentMode(config.presentModePreference));
-        renderer::Renderer renderer(context, swapchain, window);
+        renderer::Renderer renderer(context, swapchain, window, contract_test::pipelineSpec());
         contract_test::spawnScene(renderer, vfs);
 #if KEEL_VK_IMGUI
         debug::DebugUi debugUi(context, swapchain, window, renderer);

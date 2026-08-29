@@ -111,7 +111,7 @@ std::array<uint8_t, kCheckerSize * kCheckerSize * 4> loadCheckerPixels(keel::Vfs
 }
 
 // Demo content for the bindless streaming path: generated, not loaded, so
-// TextureStreamer::allocate() (via Renderer::registerDemoTexture) has
+// TextureStreamer::allocate() (via Renderer::registerTexture) has
 // more than one real texture to cycle between without needing more
 // content-pack assets.
 std::vector<uint8_t> makeStripePattern(uint32_t width, uint32_t height) {
@@ -157,6 +157,15 @@ std::vector<uint8_t> makeSolidPattern(uint32_t width, uint32_t height, uint8_t r
 
 } // namespace
 
+renderer::PipelineSpec pipelineSpec() {
+    renderer::PipelineSpec spec;
+    spec.vertPath = "shaders/cube.vert.spv";
+    spec.fragPath = "shaders/cube.frag.spv";
+    spec.vertDebugName = "cube.vert";
+    spec.fragDebugName = "cube.frag";
+    return spec;
+}
+
 void spawnScene(renderer::Renderer& renderer, keel::Vfs& vfs) {
     renderer.allocateMesh(kVertices.data(), static_cast<uint32_t>(kVertices.size()), kIndices.data(),
                            static_cast<uint32_t>(kIndices.size()));
@@ -167,16 +176,16 @@ void spawnScene(renderer::Renderer& renderer, keel::Vfs& vfs) {
     renderer.phaseSpeed() = kPhaseSpeedDegPerSec;
 
     const std::array<uint8_t, kCheckerSize * kCheckerSize * 4> checkerPixels = loadCheckerPixels(vfs);
-    renderer.registerDemoTexture(kCheckerSize, kCheckerSize, checkerPixels.data(), "checker (packages/base)");
+    renderer.registerTexture(kCheckerSize, kCheckerSize, checkerPixels.data(), "checker (packages/base)");
 
     const std::vector<uint8_t> stripes = makeStripePattern(16, 16);
-    renderer.registerDemoTexture(16, 16, stripes.data(), "stripes (generated)");
+    renderer.registerTexture(16, 16, stripes.data(), "stripes (generated)");
 
     const std::vector<uint8_t> gradient = makeGradientPattern(16, 16);
-    renderer.registerDemoTexture(16, 16, gradient.data(), "gradient (generated)");
+    renderer.registerTexture(16, 16, gradient.data(), "gradient (generated)");
 
     const std::vector<uint8_t> spare = makeSolidPattern(8, 8, 200, 200, 200);
-    renderer.registerDemoTexture(8, 8, spare.data(), "spare (generated)");
+    renderer.registerTexture(8, 8, spare.data(), "spare (generated)");
 
     // The one cooked-format fixture: BC7, read from a real KTX2 container
     // (see Ktx2.h) instead of the raw-bytes-known-ahead-of-time trick the
@@ -187,7 +196,7 @@ void spawnScene(renderer::Renderer& renderer, keel::Vfs& vfs) {
     if (bc7Fixture.format != VK_FORMAT_BC7_UNORM_BLOCK) {
         throw std::runtime_error("demo_bc7.ktx2: expected VK_FORMAT_BC7_UNORM_BLOCK");
     }
-    renderer.registerDemoTextureCompressed(bc7Fixture.width, bc7Fixture.height, bc7Fixture.format,
+    renderer.registerTextureCompressed(bc7Fixture.width, bc7Fixture.height, bc7Fixture.format,
                                             bc7Fixture.data.data(), bc7Fixture.data.size(),
                                             "demo (BC7, packages/base)");
 }

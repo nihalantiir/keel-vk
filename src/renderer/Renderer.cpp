@@ -115,7 +115,8 @@ std::vector<uint8_t> makeSolidPattern(uint32_t width, uint32_t height, uint8_t r
 
 } // namespace
 
-Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window)
+Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, keel::Window& window,
+                    const PipelineSpec& pipelineSpec)
     : context_(context), swapchain_(swapchain), window_(window) {
     // Generic default: looking at the origin from a fixed distance along
     // +Z, no input-driven controller (see the wiki's Extending page).
@@ -148,7 +149,7 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
                                         uploadTimelineSemaphore_, 2);
     createResidencyDescriptorSet();
     createDepthTarget();
-    createPipeline();
+    createPipeline(pipelineSpec);
 }
 
 Renderer::~Renderer() {
@@ -466,7 +467,7 @@ void Renderer::createTextureStreamer() {
     // descriptor set layout the device can't allocate.
     bindlessCapacity_ = std::min(kMaxBindlessTextures, context_.maxBindlessSampledImages());
     textureStreamer_ = std::make_unique<TextureStreamer>(context_, commandPool_, bindlessCapacity_, kFramesInFlight);
-    // No demo content preloaded: registerDemoTexture()/registerDemoTextureCompressed()
+    // No demo content preloaded: registerTexture()/registerTextureCompressed()
     // are how a caller adds any. Even the streamer's own resident default
     // (slot 0, queued inside TextureStreamer's constructor) isn't flushed
     // here with a special one-time command buffer - the normal per-frame
@@ -475,16 +476,16 @@ void Renderer::createTextureStreamer() {
     // same way it covers every later allocate()/update()/free() call.
 }
 
-TextureHandle Renderer::registerDemoTexture(uint32_t width, uint32_t height, const void* pixelsRgba8,
-                                             const char* debugName) {
+TextureHandle Renderer::registerTexture(uint32_t width, uint32_t height, const void* pixelsRgba8,
+                                         const char* debugName) {
     demoTextures_.push_back(textureStreamer_->allocate(width, height, pixelsRgba8, debugName));
     demoTextureBytes_.push_back(static_cast<VkDeviceSize>(width) * height * 4);
     demoTextureLastUsedFrame_.push_back(demoTextures_.size() - 1); // deterministic creation order, ties break by insertion
     return demoTextures_.back();
 }
 
-TextureHandle Renderer::registerDemoTextureCompressed(uint32_t width, uint32_t height, VkFormat format,
-                                                        const void* data, size_t dataSize, const char* debugName) {
+TextureHandle Renderer::registerTextureCompressed(uint32_t width, uint32_t height, VkFormat format,
+                                                    const void* data, size_t dataSize, const char* debugName) {
     demoTextures_.push_back(textureStreamer_->allocateCompressed(width, height, format, data, dataSize, debugName));
     demoTextureBytes_.push_back(static_cast<VkDeviceSize>(dataSize));
     demoTextureLastUsedFrame_.push_back(demoTextures_.size() - 1);
@@ -797,11 +798,11 @@ void Renderer::savePipelineCache() {
     }
 }
 
-void Renderer::createPipeline() {
+void Renderer::createPipeline(const PipelineSpec& spec) {
     loadPipelineCache();
 
-    keel::ShaderModule vertShader(context_, "shaders/cube.vert.spv", "cube.vert");
-    keel::ShaderModule fragShader(context_, "shaders/cube.frag.spv", "cube.frag");
+    keel::ShaderModule vertShader(context_, spec.vertPath, spec.vertDebugName);
+    keel::ShaderModule fragShader(context_, spec.fragPath, spec.fragDebugName);
 
     VkPipelineShaderStageCreateInfo vertStage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
