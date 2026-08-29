@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-08-29
+
+0.9.0 declared "past this release, this repo only takes bugfixes." This
+supersedes that: `MeshPool`'s append-only limitation was worth reopening
+scope for.
+
+### Added
+
+- `MeshPool::free(MeshId)`: returns a mesh's vertex/index ranges to a
+  free list, reusable by a later `allocate()` once enough frames have
+  passed to guarantee no in-flight draw can still be reading them.
+  Cheap and non-blocking, mirroring `TextureStreamer`'s existing
+  deferred-destroy pattern.
+- `MeshPool::compact()`: the separate, deliberately expensive operation
+  that eliminates fragmentation `free()` alone can't reclaim, by moving
+  live data into a tightly packed prefix. Caller must guarantee the GPU
+  is idle before calling (documented precondition, same tradeoff
+  `~MeshPool` already makes for its own pending uploads) - rare and
+  synchronous by design, not a per-frame operation.
+- `MeshPool::resolve(MeshId)`/`beginFrame()`: `resolve()` is a mesh's
+  current range, since `compact()` can move it; `beginFrame()` advances
+  the frame counter `free()` retires against. `Renderer` calls
+  `beginFrame()` once per `drawFrame()` and resolves the active mesh
+  fresh every frame rather than caching a `MeshRange`.
+- `Renderer::freeMesh()`/`compactMeshPool()`: thin passthroughs to the
+  above. Debug overlay gained a "Mesh pool: N live, N free-list bytes"
+  line, mirroring the existing texture-residency stats.
+
+### Changed
+
+- `Renderer::allocateMesh()` returns `MeshId` instead of `MeshRange`;
+  `setMesh()` takes `MeshId` instead of `MeshRange`. A cached
+  `MeshRange`'s offsets can go stale the moment `compact()` runs - a
+  caller only ever needs the id now, and re-resolves current offsets
+  through `Renderer` internally.
+- `MeshRange` gained `vertexCount` (previously only `indexCount` was
+  stored - freeing a vertex range needs to know its length too).
+
 ## [0.9.1] - 2026-08-29
 
 0.9.0's rename only reached `registerTexture()`/`registerTextureCompressed()`;
