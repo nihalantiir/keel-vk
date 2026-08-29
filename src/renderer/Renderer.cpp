@@ -1180,6 +1180,20 @@ void Renderer::recordOverlayPass(VkCommandBuffer cmd, debug::DebugUi* debugUi) {
 }
 
 void Renderer::drawFrame(debug::DebugUi* debugUi) {
+    // A 0x0 framebuffer (typically a minimized window) can't back a
+    // valid swapchain image or viewport - VkViewport requires width/height
+    // > 0. Skip the frame entirely rather than recording invalid Vulkan
+    // calls. main.cpp already skips its own sim-time advance and never
+    // calls drawFrame() at all in this case; this guard is what keeps a
+    // caller that doesn't replicate that check safe instead of hitting
+    // undefined behavior on minimize.
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    window_.getFramebufferSize(framebufferWidth, framebufferHeight);
+    if (framebufferWidth == 0 || framebufferHeight == 0) {
+        return;
+    }
+
     const VkDevice device = context_.device();
 
     vkWaitForFences(device, 1, &inFlightFences_[currentFrame_], VK_TRUE, UINT64_MAX);
