@@ -77,3 +77,17 @@ jobs:
 
       - name: Build
         run: cmake --build --preset debug
+
+      # Proves the keel target is actually discoverable and linkable
+      # from an external project via add_subdirectory (see the wiki's
+      # Extending page) - configure-only, same reasoning as above: no
+      # GPU on hosted runners to run anything, and configuring alone
+      # already proves the target exists, is correctly named, and its
+      # headers resolve. One matrix leg is enough; this doesn't vary by
+      # ImGui on/off or OS the way the direct build does.
+      - name: Configure consumer smoke (keel target exists)
+        if: matrix.os == 'ubuntu-latest' && matrix.imgui == 'ON'
+        shell: bash
+        run: |
+          cmake -S test/consumer-smoke -B test/consumer-smoke/build -G Ninja \
+            -DCMAKE_PREFIX_PATH="$KEEL_VK_VCPKG_PREFIX" -DKEEL_VK_IMGUI=OFF
