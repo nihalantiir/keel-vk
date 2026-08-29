@@ -155,8 +155,14 @@ add_subdirectory(third_party/keel-vk)
 
 add_executable(mygame src/main.cpp)
 target_link_libraries(mygame PRIVATE keel)
-keel_copy_runtime_assets(mygame)   # copies your own packages/, and this repo's compiled shaders, next to mygame's exe
+keel_copy_runtime_assets(mygame)   # copies your own packages/ next to mygame's exe
 ```
+
+`keel-vk` and `keel-vk-server` (this repo's own contract-test exe and
+headless stub) do **not** build when you `add_subdirectory` this repo:
+`KEEL_VK_BUILD_APPS` defaults ON only when this repo is the top-level
+project, OFF whenever it's `add_subdirectory()`'d. You get `keel` and
+`keel-vk-core` only.
 
 `#include` headers the same way this repo's own sources do: `"renderer/Renderer.h"`,
 `"shared/World.h"`, `"client/Config.h"`, and so on - `add_subdirectory`
@@ -169,20 +175,26 @@ actually draw. `KEEL_VK_IMGUI` still works exactly as it does in this
 repo (`-DKEEL_VK_IMGUI=OFF` before your own `add_subdirectory` call, or
 set it as a normal CMake option in your own listfile before that line).
 
-`keel_copy_runtime_assets(target)` copies two things next to your built
-exe: your own `packages/` directory (next to your `CMakeLists.txt`, not
-this repo's - it resolves relative to wherever it's called from), and
-this repo's own compiled `cube.vert.spv`/`cube.frag.spv` (the one
-pipeline `renderer::Renderer` builds isn't pluggable yet, so any target
-that constructs a `Renderer` needs them, not just `keel-vk`). Skipping
-either copy fails loudly at your first run - a missing `packages/`
-throws from `keel::Vfs` with the resolved path, a missing shader throws
-from `keel::ShaderModule` - not silently.
+`keel_copy_runtime_assets(target)` copies your own `packages/` directory
+next to your built exe (next to your `CMakeLists.txt`, not this repo's -
+it resolves relative to wherever it's called from). A missing
+`packages/` throws from `keel::Vfs` with the resolved path, not
+silently.
 
-A bare `renderer::Renderer` you construct and never populate (no
-`allocateMesh()`, `setInstances()`, or `registerDemoTexture()` calls)
-draws an empty scene: grey clear, 0 instances, no crash. Constructing
-that scene - a mesh, a camera, instances to draw - is on you; see
+`renderer::Renderer`'s constructor also takes a required
+`renderer::PipelineSpec` - the vert/frag SPIR-V paths (and debug names)
+it loads. The pipeline itself (vertex layout, descriptor sets, dynamic
+rendering formats) is fixed; only which compiled shaders it loads is
+yours to pick and copy next to your own exe. A missing shader throws
+from `keel::ShaderModule` with the resolved path, same as `packages/`.
+See [Extending](https://github.com/nihalantiir/keel-vk/wiki/Extending)'s
+"Pipeline is data".
+
+A bare `renderer::Renderer` you construct (with your own `PipelineSpec`)
+and never populate (no `allocateMesh()`, `setInstances()`, or
+`registerTexture()` calls) draws an empty scene: grey clear, 0
+instances, no crash. Constructing that scene - a mesh, a camera,
+instances to draw - is on you; see
 [Extending](https://github.com/nihalantiir/keel-vk/wiki/Extending)'s
 "Populating a scene" for the three calls that do it.
 

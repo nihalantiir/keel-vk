@@ -65,7 +65,7 @@ struct DeviceMemoryBudget {
 // (set in VulkanContext when VK_EXT_memory_budget is present) makes
 // budget/usage reflect the driver's own numbers instead of VMA's
 // heap-size estimate; either way this is real device memory state, not
-// the small artificial cap maybeEvictDemoTexture actually triggers on.
+// the small artificial cap maybeEvictTexture actually triggers on.
 DeviceMemoryBudget queryDeviceLocalBudget(keel::VulkanContext& context) {
     VkPhysicalDeviceMemoryProperties memProps;
     vkGetPhysicalDeviceMemoryProperties(context.physicalDevice(), &memProps);
@@ -98,7 +98,7 @@ glm::vec3 hsv2rgb(float hueDegrees, float saturation, float value) {
 }
 
 // Used by regenerateActiveTexture()/freeAndReallocateSpareTexture() below
-// to give the overlay's demo controls something to write - a small,
+// to give the overlay's texture controls something to write - a small,
 // generic pixel generator, not contract-test content itself (compare
 // src/client/ContractTest.cpp's checker/stripes/gradient generators,
 // which are).
@@ -138,7 +138,7 @@ Renderer::Renderer(keel::VulkanContext& context, keel::Swapchain& swapchain, kee
     createUploadTimelineSemaphore();
     createMeshPool();          // empty until a caller's allocateMesh() call
     createInstanceResources();
-    createTextureStreamer();   // just the streamer's own resident default; no demo content preloaded
+    createTextureStreamer();   // just the streamer's own resident default; nothing registered yet
     textureArray_ =
         std::make_unique<TextureArray2D>(context_, uploadCommandPool_, 64, 16, uploadTimelineSemaphore_, 1);
     // Empty by default: no entries packed, atlasRect() returns AtlasRect{}
@@ -467,7 +467,7 @@ void Renderer::createTextureStreamer() {
     // descriptor set layout the device can't allocate.
     bindlessCapacity_ = std::min(kMaxBindlessTextures, context_.maxBindlessSampledImages());
     textureStreamer_ = std::make_unique<TextureStreamer>(context_, commandPool_, bindlessCapacity_, kFramesInFlight);
-    // No demo content preloaded: registerTexture()/registerTextureCompressed()
+    // Nothing registered yet: registerTexture()/registerTextureCompressed()
     // are how a caller adds any. Even the streamer's own resident default
     // (slot 0, queued inside TextureStreamer's constructor) isn't flushed
     // here with a special one-time command buffer - the normal per-frame
@@ -478,18 +478,18 @@ void Renderer::createTextureStreamer() {
 
 TextureHandle Renderer::registerTexture(uint32_t width, uint32_t height, const void* pixelsRgba8,
                                          const char* debugName) {
-    demoTextures_.push_back(textureStreamer_->allocate(width, height, pixelsRgba8, debugName));
-    demoTextureBytes_.push_back(static_cast<VkDeviceSize>(width) * height * 4);
-    demoTextureLastUsedFrame_.push_back(demoTextures_.size() - 1); // deterministic creation order, ties break by insertion
-    return demoTextures_.back();
+    registeredTextures_.push_back(textureStreamer_->allocate(width, height, pixelsRgba8, debugName));
+    registeredTextureBytes_.push_back(static_cast<VkDeviceSize>(width) * height * 4);
+    registeredTextureLastUsedFrame_.push_back(registeredTextures_.size() - 1); // deterministic creation order, ties break by insertion
+    return registeredTextures_.back();
 }
 
 TextureHandle Renderer::registerTextureCompressed(uint32_t width, uint32_t height, VkFormat format,
                                                     const void* data, size_t dataSize, const char* debugName) {
-    demoTextures_.push_back(textureStreamer_->allocateCompressed(width, height, format, data, dataSize, debugName));
-    demoTextureBytes_.push_back(static_cast<VkDeviceSize>(dataSize));
-    demoTextureLastUsedFrame_.push_back(demoTextures_.size() - 1);
-    return demoTextures_.back();
+    registeredTextures_.push_back(textureStreamer_->allocateCompressed(width, height, format, data, dataSize, debugName));
+    registeredTextureBytes_.push_back(static_cast<VkDeviceSize>(dataSize));
+    registeredTextureLastUsedFrame_.push_back(registeredTextures_.size() - 1);
+    return registeredTextures_.back();
 }
 
 void Renderer::createResidencyDescriptorSet() {
@@ -553,7 +553,7 @@ void Renderer::createResidencyDescriptorSet() {
 }
 
 void Renderer::regenerateActiveTexture() {
-    if (activeDemoTextureIndex_ < 0 || activeDemoTextureIndex_ >= static_cast<int>(demoTextures_.size())) {
+    if (activeTextureIndex_ < 0 || activeTextureIndex_ >= static_cast<int>(registeredTextures_.size())) {
         return;
     }
     ++regenerateCounter_;
@@ -562,31 +562,31 @@ void Renderer::regenerateActiveTexture() {
     const std::vector<uint8_t> pixels =
         makeSolidPattern(16, 16, static_cast<uint8_t>(color.r * 255.0f), static_cast<uint8_t>(color.g * 255.0f),
                           static_cast<uint8_t>(color.b * 255.0f));
-    textureStreamer_->update(demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)], 16, 16, pixels.data(),
+    textureStreamer_->update(registeredTextures_[static_cast<size_t>(activeTextureIndex_)], 16, 16, pixels.data(),
                               "regenerated (streamed)");
-    demoTextureBytes_[static_cast<size_t>(activeDemoTextureIndex_)] = 16 * 16 * 4;
-    demoTextureLastUsedFrame_[static_cast<size_t>(activeDemoTextureIndex_)] = frameCounter_;
+    registeredTextureBytes_[static_cast<size_t>(activeTextureIndex_)] = 16 * 16 * 4;
+    registeredTextureLastUsedFrame_[static_cast<size_t>(activeTextureIndex_)] = frameCounter_;
 }
 
 void Renderer::freeAndReallocateSpareTexture() {
-    // Index into demoTextures_ by position, same as the "regenerate" and
-    // "residency picker" controls - eviction (maybeEvictDemoTexture) can
+    // Index into registeredTextures_ by position, same as the "regenerate" and
+    // "residency picker" controls - eviction (maybeEvictTexture) can
     // shift what's actually at this position, same as it can for any
-    // other index-based demo control. Debug-overlay convenience button,
+    // other index-based control. Debug-overlay convenience button,
     // not a stable slot identity.
     constexpr size_t kSpareIndex = 3; // see createTextureStreamer: checker, stripes, gradient, spare
-    if (demoTextures_.size() <= kSpareIndex) {
+    if (registeredTextures_.size() <= kSpareIndex) {
         return;
     }
-    textureStreamer_->free(demoTextures_[kSpareIndex]);
+    textureStreamer_->free(registeredTextures_[kSpareIndex]);
     ++regenerateCounter_;
     const glm::vec3 color = hsv2rgb(static_cast<float>((regenerateCounter_ * 83) % 360), 0.6f, 0.9f);
     const std::vector<uint8_t> pixels =
         makeSolidPattern(8, 8, static_cast<uint8_t>(color.r * 255.0f), static_cast<uint8_t>(color.g * 255.0f),
                           static_cast<uint8_t>(color.b * 255.0f));
-    demoTextures_[kSpareIndex] = textureStreamer_->allocate(8, 8, pixels.data(), "spare (reallocated)");
-    demoTextureBytes_[kSpareIndex] = 8 * 8 * 4;
-    demoTextureLastUsedFrame_[kSpareIndex] = frameCounter_;
+    registeredTextures_[kSpareIndex] = textureStreamer_->allocate(8, 8, pixels.data(), "spare (reallocated)");
+    registeredTextureBytes_[kSpareIndex] = 8 * 8 * 4;
+    registeredTextureLastUsedFrame_[kSpareIndex] = frameCounter_;
 }
 
 bool Renderer::memoryBudgetSupported() const {
@@ -601,16 +601,16 @@ uint64_t Renderer::deviceMemoryUsageBytes() const {
     return queryDeviceLocalBudget(context_).usageBytes;
 }
 
-VkDeviceSize Renderer::demoResidentBytes() const {
+VkDeviceSize Renderer::residentBytes() const {
     VkDeviceSize total = 0;
-    for (VkDeviceSize bytes : demoTextureBytes_) {
+    for (VkDeviceSize bytes : registeredTextureBytes_) {
         total += bytes;
     }
     return total;
 }
 
-void Renderer::maybeEvictDemoTexture() {
-    if (demoTextures_.empty()) {
+void Renderer::maybeEvictTexture() {
+    if (registeredTextures_.empty()) {
         return;
     }
 
@@ -621,7 +621,7 @@ void Renderer::maybeEvictDemoTexture() {
     // filling gigabytes of real VRAM. Never active outside a Debug
     // build - see the wiki's Rendering page for why 2048 is deliberately
     // unrelated to any real budget number.
-    shouldEvict = demoResidentBytes() > kDemoResidentCapBytes;
+    shouldEvict = residentBytes() > kResidentCapBytes;
 #endif
     if (!shouldEvict && memoryBudgetSupported()) {
         // The real trigger, gated on VK_EXT_memory_budget actually being
@@ -638,42 +638,42 @@ void Renderer::maybeEvictDemoTexture() {
         return;
     }
 
-    // activeDemoTextureIndex()'s current entry is the only protected one
+    // activeTextureIndex()'s current entry is the only protected one
     // (slot 0, the streamer's own white default, is never in
-    // demoTextures_ at all - see createTextureStreamer). Everything else
-    // is eviction-eligible; a caller indexing demoTextures_ by position
+    // registeredTextures_ at all - see createTextureStreamer). Everything else
+    // is eviction-eligible; a caller indexing registeredTextures_ by position
     // for its own instances (as ContractTest.cpp's satellites do,
-    // re-deriving their index from demoTextures_.size() every frame)
+    // re-deriving their index from registeredTextures_.size() every frame)
     // just sees a reshuffled rotation after an eviction, not a dangling
     // handle.
-    const bool activeIndexProtects = demoResidencyKind_ == TextureKind::Bindless && activeDemoTextureIndex_ >= 0 &&
-                                      static_cast<size_t>(activeDemoTextureIndex_) < demoTextures_.size();
+    const bool activeIndexProtects = residencyKind_ == TextureKind::Bindless && activeTextureIndex_ >= 0 &&
+                                      static_cast<size_t>(activeTextureIndex_) < registeredTextures_.size();
     const size_t protectedIndex =
-        activeIndexProtects ? static_cast<size_t>(activeDemoTextureIndex_) : demoTextures_.size();
+        activeIndexProtects ? static_cast<size_t>(activeTextureIndex_) : registeredTextures_.size();
 
-    size_t oldestIndex = demoTextures_.size();
+    size_t oldestIndex = registeredTextures_.size();
     uint64_t oldestFrame = UINT64_MAX;
-    for (size_t i = 0; i < demoTextures_.size(); ++i) {
+    for (size_t i = 0; i < registeredTextures_.size(); ++i) {
         if (i == protectedIndex) {
             continue;
         }
-        if (demoTextureLastUsedFrame_[i] < oldestFrame) {
-            oldestFrame = demoTextureLastUsedFrame_[i];
+        if (registeredTextureLastUsedFrame_[i] < oldestFrame) {
+            oldestFrame = registeredTextureLastUsedFrame_[i];
             oldestIndex = i;
         }
     }
-    if (oldestIndex == demoTextures_.size()) {
+    if (oldestIndex == registeredTextures_.size()) {
         return; // nothing eligible (only the protected entry remains)
     }
 
-    textureStreamer_->free(demoTextures_[oldestIndex]);
-    demoTextures_.erase(demoTextures_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
-    demoTextureBytes_.erase(demoTextureBytes_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
-    demoTextureLastUsedFrame_.erase(demoTextureLastUsedFrame_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
+    textureStreamer_->free(registeredTextures_[oldestIndex]);
+    registeredTextures_.erase(registeredTextures_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
+    registeredTextureBytes_.erase(registeredTextureBytes_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
+    registeredTextureLastUsedFrame_.erase(registeredTextureLastUsedFrame_.begin() + static_cast<std::ptrdiff_t>(oldestIndex));
     ++evictionCount_;
 
-    if (activeDemoTextureIndex_ >= static_cast<int>(demoTextures_.size())) {
-        activeDemoTextureIndex_ = demoTextures_.empty() ? 0 : static_cast<int>(demoTextures_.size()) - 1;
+    if (activeTextureIndex_ >= static_cast<int>(registeredTextures_.size())) {
+        activeTextureIndex_ = registeredTextures_.empty() ? 0 : static_cast<int>(registeredTextures_.size()) - 1;
     }
 }
 
@@ -681,14 +681,14 @@ uint32_t Renderer::textureArrayLayerCount() const {
     return textureArray_->layerCount();
 }
 
-uint32_t Renderer::activeDemoTextureSlot() const {
+uint32_t Renderer::activeTextureSlot() const {
     const bool hasActive =
-        activeDemoTextureIndex_ >= 0 && activeDemoTextureIndex_ < static_cast<int>(demoTextures_.size());
-    return hasActive ? demoTextures_[static_cast<size_t>(activeDemoTextureIndex_)].slot : 0;
+        activeTextureIndex_ >= 0 && activeTextureIndex_ < static_cast<int>(registeredTextures_.size());
+    return hasActive ? registeredTextures_[static_cast<size_t>(activeTextureIndex_)].slot : 0;
 }
 
-uint32_t Renderer::demoTextureSlotAt(uint32_t index) const {
-    return demoTextures_.empty() ? 0 : demoTextures_[index % demoTextures_.size()].slot;
+uint32_t Renderer::registeredTextureSlotAt(uint32_t index) const {
+    return registeredTextures_.empty() ? 0 : registeredTextures_[index % registeredTextures_.size()].slot;
 }
 
 AtlasRect Renderer::atlasRect(uint32_t index) const {
@@ -1073,21 +1073,21 @@ void Renderer::recordWorldPass(VkCommandBuffer cmd, VkExtent2D extent) {
     pushConstants.phaseSpeed = phaseSpeedDegPerSec_;
     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants), &pushConstants);
 
-    // Demo-texture eviction bookkeeping: marks the overlay's currently
+    // Registered-texture eviction bookkeeping: marks the overlay's currently
     // previewed Bindless slot as freshly used, then frees the oldest
-    // unused entry if total demo resident bytes are over the cap. Runs
+    // unused entry if total resident bytes are over the cap. Runs
     // before the instance-writing loop below so anything indexing
-    // demoTextures_ by position (as ContractTest.cpp's satellites do)
+    // registeredTextures_ by position (as ContractTest.cpp's satellites do)
     // sees the post-eviction state this same frame, not a stale index.
     // Independent of instances_ - this bookkeeping happens whether or not
     // anything actually samples that slot this frame.
     ++frameCounter_;
-    const bool hasActiveDemoTexture =
-        activeDemoTextureIndex_ >= 0 && activeDemoTextureIndex_ < static_cast<int>(demoTextures_.size());
-    if (demoResidencyKind_ == TextureKind::Bindless && hasActiveDemoTexture) {
-        demoTextureLastUsedFrame_[static_cast<size_t>(activeDemoTextureIndex_)] = frameCounter_;
+    const bool hasActiveTexture =
+        activeTextureIndex_ >= 0 && activeTextureIndex_ < static_cast<int>(registeredTextures_.size());
+    if (residencyKind_ == TextureKind::Bindless && hasActiveTexture) {
+        registeredTextureLastUsedFrame_[static_cast<size_t>(activeTextureIndex_)] = frameCounter_;
     }
-    maybeEvictDemoTexture();
+    maybeEvictTexture();
 
     // Write this frame's instances, exactly as setInstances() last set
     // them. Renderer doesn't know or care what they represent - see

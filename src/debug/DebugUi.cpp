@@ -168,15 +168,15 @@ void DebugUi::drawOverlay() {
         ImGui::TextDisabled("VRAM: N/A (VK_EXT_memory_budget not present)");
     }
 #ifdef KEEL_VK_DEBUG
-    ImGui::Text("Demo textures resident: %llu / %llu bytes (debug cap), %u evicted",
-                static_cast<unsigned long long>(renderer_.demoResidentBytes()),
-                static_cast<unsigned long long>(renderer_.demoResidentCapBytes()), renderer_.evictionCount());
+    ImGui::Text("Registered textures resident: %llu / %llu bytes (debug cap), %u evicted",
+                static_cast<unsigned long long>(renderer_.residentBytes()),
+                static_cast<unsigned long long>(renderer_.residentCapBytes()), renderer_.evictionCount());
 #else
-    ImGui::Text("Demo textures resident: %llu bytes, %u evicted (debug cap inactive outside Debug builds)",
-                static_cast<unsigned long long>(renderer_.demoResidentBytes()), renderer_.evictionCount());
+    ImGui::Text("Registered textures resident: %llu bytes, %u evicted (debug cap inactive outside Debug builds)",
+                static_cast<unsigned long long>(renderer_.residentBytes()), renderer_.evictionCount());
 #endif
-    ImGui::SliderInt("Cube texture slot", &renderer_.activeDemoTextureIndex(), 0, renderer_.demoTextureCount() - 1,
-                      "demo slot %d");
+    ImGui::SliderInt("Cube texture slot", &renderer_.activeTextureIndex(), 0, renderer_.registeredTextureCount() - 1,
+                      "slot %d");
     if (ImGui::Button("Regenerate active (streamed update)")) {
         renderer_.regenerateActiveTexture();
     }
@@ -185,12 +185,12 @@ void DebugUi::drawOverlay() {
     }
     ImGui::Text("Texture array: %u layers", renderer_.textureArrayLayerCount());
     if (renderer_.textureArrayLayerCount() > 0) {
-        ImGui::SliderInt("Array layer", &renderer_.demoArrayLayer(), 0,
+        ImGui::SliderInt("Array layer", &renderer_.arrayLayer(), 0,
                           static_cast<int>(renderer_.textureArrayLayerCount()) - 1);
     }
     ImGui::Text("Atlas: %u rects packed", renderer_.atlasRectCount());
     if (renderer_.atlasRectCount() > 0) {
-        ImGui::SliderInt("Atlas rect", &renderer_.demoAtlasRectIndex(), 0,
+        ImGui::SliderInt("Atlas rect", &renderer_.atlasRectIndex(), 0,
                           static_cast<int>(renderer_.atlasRectCount()) - 1);
     }
 

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-08-29
+
+0.9.0's rename only reached `registerTexture()`/`registerTextureCompressed()`;
+everything downstream of them still said "demo." Finished it.
+
+### Changed
+
+- Finished the 0.9.0 rename: `activeDemoTextureSlot()`, `activeDemoTextureIndex()`,
+  `demoTextureCount()`, `demoTextureSlotAt()`, `demoResidentBytes()`,
+  `demoResidentCapBytes()`, `kDemoResidentCapBytes`, `demoArrayLayer()`,
+  `demoAtlasRectIndex()`, and the private `maybeEvictDemoTexture()`/
+  `demoTextures_`/`demoTextureBytes_`/`demoTextureLastUsedFrame_`/
+  `demoResidencyKind_` are now `activeTextureSlot()`, `activeTextureIndex()`,
+  `registeredTextureCount()`, `registeredTextureSlotAt()`, `residentBytes()`,
+  `residentCapBytes()`, `kResidentCapBytes`, `arrayLayer()`, `atlasRectIndex()`,
+  `maybeEvictTexture()`, `registeredTextures_`, `registeredTextureBytes_`,
+  `registeredTextureLastUsedFrame_`, `residencyKind_`. The debug overlay's
+  "Demo textures resident" / "demo slot %d" strings are now "Registered
+  textures resident" / "slot %d". README and wiki (Extending, Rendering)
+  updated to match.
+- `glslc` discovery moved inside `if(KEEL_VK_BUILD_APPS)`: a consumer that
+  `add_subdirectory()`s this repo without opting into `KEEL_VK_BUILD_APPS`
+  is no longer required to have a working `glslc` just to configure - it
+  was never going to compile this repo's cube shaders anyway.
+
 ## [0.9.0] - 2026-08-29
 
 A consumer that `add_subdirectory()`s this repo gets `keel` and nothing

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(keel-vk VERSION 0.9.0 LANGUAGES CXX)
+project(keel-vk VERSION 0.9.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -339,49 +339,50 @@ function(keel_copy_runtime_assets target)
   )
 endfunction()
 
-# --- Shader compilation (GLSL -> SPIR-V) ---
-if(TARGET Vulkan::glslc)
-  set(GLSLC_COMMAND Vulkan::glslc)
-else()
-  find_program(GLSLC_EXECUTABLE NAMES glslc
-    PATHS "${VULKAN_SDK_ROOT}/Bin" "${VULKAN_SDK_ROOT}/bin" NO_DEFAULT_PATH)
-  if(NOT GLSLC_EXECUTABLE)
-    message(FATAL_ERROR "Could not find glslc under ${VULKAN_SDK_ROOT}")
-  endif()
-  set(GLSLC_COMMAND "${GLSLC_EXECUTABLE}")
-endif()
-
-set(SHADER_SOURCES
-  shaders/cube.vert
-  shaders/cube.frag
-)
-set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/bin/shaders")
-# CACHE INTERNAL, not a plain variable: keel_copy_runtime_assets() above
-# may be called from a consumer's own directory scope (after
-# add_subdirectory), where a plain variable set here wouldn't be visible.
-set(KEEL_VK_SHADER_OUTPUT_DIR "${SHADER_OUTPUT_DIR}" CACHE INTERNAL "")
-
-set(SHADER_SPV_FILES "")
-foreach(shader ${SHADER_SOURCES})
-  get_filename_component(shader_name "${shader}" NAME)
-  set(shader_output "${SHADER_OUTPUT_DIR}/${shader_name}.spv")
-  add_custom_command(
-    OUTPUT "${shader_output}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUTPUT_DIR}"
-    # --target-env=vulkan1.3 so GL_EXT_nonuniform_qualifier and the runtime
-    # descriptor array in cube.frag get SPIR-V that actually matches the
-    # device contract (descriptor indexing), not the vulkan1.0 default.
-    COMMAND ${GLSLC_COMMAND} --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/${shader}" -o "${shader_output}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${shader}"
-    COMMENT "Compiling shader ${shader}"
-    VERBATIM
-  )
-  list(APPEND SHADER_SPV_FILES "${shader_output}")
-endforeach()
-
-add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
-
 if(KEEL_VK_BUILD_APPS)
+  # --- Shader compilation (GLSL -> SPIR-V): only needed to build this
+  # repo's own cube.vert/cube.frag for keel-vk. Gated behind
+  # KEEL_VK_BUILD_APPS so a consumer that add_subdirectory()s this repo
+  # without opting in isn't forced to have a working glslc just to
+  # configure - they supply and compile their own shaders instead, see
+  # the wiki's Extending page ("Pipeline is data"). ---
+  if(TARGET Vulkan::glslc)
+    set(GLSLC_COMMAND Vulkan::glslc)
+  else()
+    find_program(GLSLC_EXECUTABLE NAMES glslc
+      PATHS "${VULKAN_SDK_ROOT}/Bin" "${VULKAN_SDK_ROOT}/bin" NO_DEFAULT_PATH)
+    if(NOT GLSLC_EXECUTABLE)
+      message(FATAL_ERROR "Could not find glslc under ${VULKAN_SDK_ROOT}")
+    endif()
+    set(GLSLC_COMMAND "${GLSLC_EXECUTABLE}")
+  endif()
+
+  set(SHADER_SOURCES
+    shaders/cube.vert
+    shaders/cube.frag
+  )
+  set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/bin/shaders")
+
+  set(SHADER_SPV_FILES "")
+  foreach(shader ${SHADER_SOURCES})
+    get_filename_component(shader_name "${shader}" NAME)
+    set(shader_output "${SHADER_OUTPUT_DIR}/${shader_name}.spv")
+    add_custom_command(
+      OUTPUT "${shader_output}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUTPUT_DIR}"
+      # --target-env=vulkan1.3 so GL_EXT_nonuniform_qualifier and the runtime
+      # descriptor array in cube.frag get SPIR-V that actually matches the
+      # device contract (descriptor indexing), not the vulkan1.0 default.
+      COMMAND ${GLSLC_COMMAND} --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/${shader}" -o "${shader_output}"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${shader}"
+      COMMENT "Compiling shader ${shader}"
+      VERBATIM
+    )
+    list(APPEND SHADER_SPV_FILES "${shader_output}")
+  endforeach()
+
+  add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
+
   # --- Copy packages/ next to the executable: keel::Vfs mounts relative
   # to SDL_GetBasePath(), the executable's own directory. ---
   keel_copy_runtime_assets(keel-vk)
@@ -394,7 +395,7 @@ if(KEEL_VK_BUILD_APPS)
   # own shaders instead; see the wiki's Extending page. ---
   add_custom_command(TARGET keel-vk POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${KEEL_VK_SHADER_OUTPUT_DIR}"
+      "${SHADER_OUTPUT_DIR}"
       "$<TARGET_FILE_DIR:keel-vk>/shaders"
     COMMENT "Copying shaders/ next to the executable"
   )

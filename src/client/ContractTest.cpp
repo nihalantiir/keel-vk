@@ -196,9 +196,8 @@ void spawnScene(renderer::Renderer& renderer, keel::Vfs& vfs) {
     if (bc7Fixture.format != VK_FORMAT_BC7_UNORM_BLOCK) {
         throw std::runtime_error("demo_bc7.ktx2: expected VK_FORMAT_BC7_UNORM_BLOCK");
     }
-    renderer.registerTextureCompressed(bc7Fixture.width, bc7Fixture.height, bc7Fixture.format,
-                                            bc7Fixture.data.data(), bc7Fixture.data.size(),
-                                            "demo (BC7, packages/base)");
+    renderer.registerTextureCompressed(bc7Fixture.width, bc7Fixture.height, bc7Fixture.format, bc7Fixture.data.data(),
+                                        bc7Fixture.data.size(), "demo (BC7, packages/base)");
 }
 
 std::vector<renderer::InstanceDesc> buildInstances(renderer::Renderer& renderer, const glm::mat4& heroModel,
@@ -217,17 +216,17 @@ std::vector<renderer::InstanceDesc> buildInstances(renderer::Renderer& renderer,
     switch (renderer.residencyMode()) {
         case renderer::TextureKind::Array: {
             const uint32_t layerCount = renderer.textureArrayLayerCount();
-            hero.texture.index = layerCount == 0 ? 0 : static_cast<uint32_t>(renderer.demoArrayLayer()) % layerCount;
+            hero.texture.index = layerCount == 0 ? 0 : static_cast<uint32_t>(renderer.arrayLayer()) % layerCount;
             break;
         }
         case renderer::TextureKind::Atlas: {
-            const renderer::AtlasRect rect = renderer.atlasRect(static_cast<uint32_t>(renderer.demoAtlasRectIndex()));
+            const renderer::AtlasRect rect = renderer.atlasRect(static_cast<uint32_t>(renderer.atlasRectIndex()));
             hero.texture.atlasUvRect = glm::vec4(rect.u0, rect.v0, rect.u1, rect.v1);
             break;
         }
         case renderer::TextureKind::Bindless:
         default:
-            hero.texture.index = renderer.activeDemoTextureSlot();
+            hero.texture.index = renderer.activeTextureSlot();
             break;
     }
     instances.push_back(hero);
@@ -253,7 +252,7 @@ std::vector<renderer::InstanceDesc> buildInstances(renderer::Renderer& renderer,
         switch (i % 3) {
             case 0:
                 satellite.texture.kind = renderer::TextureKind::Bindless;
-                satellite.texture.index = renderer.demoTextureSlotAt(i);
+                satellite.texture.index = renderer.registeredTextureSlotAt(i);
                 break;
             case 1: {
                 const uint32_t layerCount = renderer.textureArrayLayerCount();

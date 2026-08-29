@@ -137,58 +137,58 @@ public:
     uint32_t bindlessCapacity() const { return bindlessCapacity_; }
     uint32_t boundTextureCount() const { return textureStreamer_->usedSlots(); }
 
-    // Registers a texture into the demo-texture rotation the overlay's
-    // "Cube texture slot" control and eviction (maybeEvictDemoTexture)
+    // Registers a texture into the registered-texture rotation the overlay's
+    // "Cube texture slot" control and eviction (maybeEvictTexture)
     // operate on. Renderer's constructor registers none of its own -
     // src/client/ decides what (if anything) goes in here; an empty
-    // rotation is a valid, harmless state (activeDemoTextureSlot() falls
+    // rotation is a valid, harmless state (activeTextureSlot() falls
     // back to the streamer's resident default). Safe to call anytime,
     // including mid-frame, same as TextureStreamer::allocate() itself.
     TextureHandle registerTexture(uint32_t width, uint32_t height, const void* pixelsRgba8, const char* debugName);
     TextureHandle registerTextureCompressed(uint32_t width, uint32_t height, VkFormat format, const void* data,
                                              size_t dataSize, const char* debugName);
 
-    // The bindless slot activeDemoTextureIndex() currently points at, or
+    // The bindless slot activeTextureIndex() currently points at, or
     // the streamer's resident default (slot 0) if the rotation is empty
     // or the index is out of range. Use this to fill an InstanceDesc's
     // TextureRef for whatever a caller wants to call "the hero."
-    uint32_t activeDemoTextureSlot() const;
+    uint32_t activeTextureSlot() const;
 
     // Wraps Atlas2D::rects(), empty-safe: AtlasRect{} if the atlas has no
     // rects packed. index wraps modulo rects().size(), same as the old
     // hardcoded satellite loop did.
     AtlasRect atlasRect(uint32_t index) const;
 
-    // Demo controls for the debug overlay: which of demoTextures_ the cube
+    // Controls for the debug overlay: which of registeredTextures_ the cube
     // currently samples, a way to prove update() streams live, and a way
     // to prove free()+allocate() cycle a slot's generation. See
-    // registerTexture() above for what populates demoTextures_.
-    int& activeDemoTextureIndex() { return activeDemoTextureIndex_; }
-    int demoTextureCount() const { return static_cast<int>(demoTextures_.size()); }
+    // registerTexture() above for what populates registeredTextures_.
+    int& activeTextureIndex() { return activeTextureIndex_; }
+    int registeredTextureCount() const { return static_cast<int>(registeredTextures_.size()); }
     void regenerateActiveTexture();
     void freeAndReallocateSpareTexture();
 
-    // The bindless slot of the demoTextures_ entry at index (wrapping
-    // modulo demoTextureCount()), or 0 (the streamer's resident default)
-    // if the rotation is empty. Unlike activeDemoTextureSlot() above,
+    // The bindless slot of the registeredTextures_ entry at index (wrapping
+    // modulo registeredTextureCount()), or 0 (the streamer's resident default)
+    // if the rotation is empty. Unlike activeTextureSlot() above,
     // this names an arbitrary position rather than the overlay's current
     // pick - for a caller round-robining several instances through the
     // whole registered set, the way ContractTest.cpp's satellites do.
-    uint32_t demoTextureSlotAt(uint32_t index) const;
+    uint32_t registeredTextureSlotAt(uint32_t index) const;
 
     // Real VK_EXT_memory_budget numbers (see VulkanContext::
     // memoryBudgetSupported), for the overlay's "VRAM" line - purely
-    // informational, never the eviction trigger. demoResidentBytes/
-    // demoResidentCapBytes/evictionCount are the actual eviction state:
-    // see maybeEvictDemoTexture in Renderer.cpp and the wiki's Rendering
+    // informational, never the eviction trigger. residentBytes/
+    // residentCapBytes/evictionCount are the actual eviction state:
+    // see maybeEvictTexture in Renderer.cpp and the wiki's Rendering
     // page for why the cap is a small, deliberately artificial constant
     // rather than a fraction of the real device budget.
     bool memoryBudgetSupported() const;
     uint64_t deviceMemoryBudgetBytes() const;
     uint64_t deviceMemoryUsageBytes() const;
-    VkDeviceSize demoResidentBytes() const;
-    static constexpr VkDeviceSize kDemoResidentCapBytes = 2048;
-    VkDeviceSize demoResidentCapBytes() const { return kDemoResidentCapBytes; }
+    VkDeviceSize residentBytes() const;
+    static constexpr VkDeviceSize kResidentCapBytes = 2048;
+    VkDeviceSize residentCapBytes() const { return kResidentCapBytes; }
     uint32_t evictionCount() const { return evictionCount_; }
 
     uint32_t textureArrayLayerCount() const;
@@ -200,9 +200,9 @@ public:
     // ContractTest.cpp's hero for the pattern). All three are visibly
     // sampled by switching this, not just constructed - see the wiki's
     // Rendering page.
-    TextureKind& residencyMode() { return demoResidencyKind_; }
-    int& demoArrayLayer() { return demoArrayLayer_; }
-    int& demoAtlasRectIndex() { return demoAtlasRectIndex_; }
+    TextureKind& residencyMode() { return residencyKind_; }
+    int& arrayLayer() { return arrayLayer_; }
+    int& atlasRectIndex() { return atlasRectIndex_; }
 
     // GPU scene stats from the most recently recorded frame, for the
     // debug overlay. instanceCount is how many instance slots were
@@ -246,12 +246,12 @@ private:
     void createUploadTimelineSemaphore();
     void createTextureStreamer();
     void createResidencyDescriptorSet();
-    // Frees the oldest unused entry in demoTextures_ (never
-    // activeDemoTextureIndex()'s current entry when residencyMode() is
-    // Bindless-kind) once demoResidentBytes() exceeds kDemoResidentCapBytes.
+    // Frees the oldest unused entry in registeredTextures_ (never
+    // activeTextureIndex()'s current entry when residencyMode() is
+    // Bindless-kind) once residentBytes() exceeds kResidentCapBytes.
     // Called once per frame from recordWorldPass, before anything
-    // indexing demoTextures_ by position for this frame's instances.
-    void maybeEvictDemoTexture();
+    // indexing registeredTextures_ by position for this frame's instances.
+    void maybeEvictTexture();
     void createTimestampPool();
     void createDepthTarget();
     void destroyDepthTarget();
@@ -369,17 +369,17 @@ private:
     uint32_t bindlessCapacity_ = 0; // set in createTextureStreamer(), see bindlessCapacity()
     // Empty until registerTexture()/registerTextureCompressed()
     // add something - see those methods' comments in Renderer.h.
-    std::vector<TextureHandle> demoTextures_;
-    // Parallel to demoTextures_: byte size (for demoResidentBytes()) and
-    // the frame each entry was last activeDemoTextureIndex()'s pick while
-    // residencyMode() was Bindless-kind (for maybeEvictDemoTexture's
+    std::vector<TextureHandle> registeredTextures_;
+    // Parallel to registeredTextures_: byte size (for residentBytes()) and
+    // the frame each entry was last activeTextureIndex()'s pick while
+    // residencyMode() was Bindless-kind (for maybeEvictTexture's
     // oldest-first pick). Kept in lockstep by every function that grows,
-    // shrinks, or replaces demoTextures_.
-    std::vector<VkDeviceSize> demoTextureBytes_;
-    std::vector<uint64_t> demoTextureLastUsedFrame_;
+    // shrinks, or replaces registeredTextures_.
+    std::vector<VkDeviceSize> registeredTextureBytes_;
+    std::vector<uint64_t> registeredTextureLastUsedFrame_;
     uint64_t frameCounter_ = 0;
     uint32_t evictionCount_ = 0;
-    int activeDemoTextureIndex_ = 0;
+    int activeTextureIndex_ = 0;
     uint32_t regenerateCounter_ = 0;
 
     // Populated once at construction. Both are visibly sampled by the
@@ -395,9 +395,9 @@ private:
     VkDescriptorPool residencyDescriptorPool_ = VK_NULL_HANDLE;
     VkDescriptorSet residencySet_ = VK_NULL_HANDLE;
 
-    TextureKind demoResidencyKind_ = TextureKind::Bindless;
-    int demoArrayLayer_ = 3;
-    int demoAtlasRectIndex_ = 0;
+    TextureKind residencyKind_ = TextureKind::Bindless;
+    int arrayLayer_ = 3;
+    int atlasRectIndex_ = 0;
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
