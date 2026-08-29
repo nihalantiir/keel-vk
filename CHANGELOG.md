@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-08-29
+
+A stranger can start a new repo on Keel in one sitting without editing
+Renderer.cpp to delete the cube.
+
+### Added
+
+- `keel-vk-core` (layer 0) and `keel` (layer 1) are now separate CMake
+  static libraries; `keel` links `keel-vk-core`, so linking `keel` is
+  enough for both. A consumer gets there with
+  `add_subdirectory(third_party/keel-vk)` + `target_link_libraries(mygame PRIVATE keel)`
+  - verified against a real external project, not just built in place.
+  `keel_copy_runtime_assets(target)` copies a consumer's own `packages/`
+  and this repo's compiled shaders next to their executable.
+- `renderer::Renderer` no longer constructs any mesh, texture, or
+  instance content. `allocateMesh()`/`setMesh()`,
+  `registerDemoTexture()`/`registerDemoTextureCompressed()`, and
+  `setInstances()` are the extension points a caller uses instead. A
+  bare `Renderer` with none of those called draws an empty scene: grey
+  clear, 0 instances, no crash. The hero cube, satellite ring, and demo
+  textures that used to live inside `Renderer` moved to
+  `src/client/ContractTest.cpp` - this repo's own contract test, not
+  something a fork inherits.
+- `keel/Version.h` is generated from this project's own CMake version at
+  configure time; the window title and server startup log read it
+  instead of a hand-maintained literal, so they can't drift from what
+  was actually built.
+- `keel/keel.hpp` and `keel/foundation.hpp`: two thin umbrella headers
+  (a handful of `#include` lines each, not a precompiled header) for the
+  layer 0 bootstrap and the non-renderer parts of layer 1. Neither
+  includes `renderer/Renderer.h` - include that directly when you draw.
+- CI configures (not builds - no GPU on hosted runners) a small fixture
+  that `add_subdirectory()`s the repo root and links `keel`, proving the
+  target is actually discoverable from outside this repo, not just
+  inside it.
+
+### Changed
+
+- `packages/base/package.json`'s `name` is now `keel-vk-template-base`,
+  explicitly marked as template content a fork replaces.
+- `Renderer::drawFrame()` now checks the framebuffer size itself and
+  returns immediately on a `0x0` framebuffer (a minimized window),
+  instead of relying on the caller to replicate that guard - a fork that
+  doesn't copy `main()`'s own check no longer hits an invalid
+  `VkViewport`.
+- `Vfs`'s missing-`packages/` error and `ShaderModule`'s missing-shader
+  error already fail loudly with a resolved path; both are now
+  documented on the wiki's Troubleshooting page with the exact fix.
+
+### Fixed
+
+- `KEEL_VK_DEBUG` wasn't propagating to the `keel` target during the
+  library split - only `keel-vk-core` had it, so validation-gated
+  behavior in `Renderer.cpp`/`DebugUi.cpp` silently went dark unless a
+  consumer also set it directly. Every `CMAKE_SOURCE_DIR`/`CMAKE_BINARY_DIR`
+  in this repo's `CMakeLists.txt` is now `CMAKE_CURRENT_SOURCE_DIR`/
+  `CMAKE_CURRENT_BINARY_DIR`, so `add_subdirectory` keeps this repo's own
+  build artifacts (`external/`, shaders, PDBs, the exe) self-contained
+  instead of landing in a consumer's build root. Both bugs would have
+  hit a real fork in its first few minutes; caught by actually running
+  the `add_subdirectory` scenario, not just building it in place.
+
 ## [0.7.0] - 2026-08-29
 
 Cooked textures, real budget policy.
